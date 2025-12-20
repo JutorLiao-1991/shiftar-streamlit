@@ -118,7 +118,7 @@ def get_all_events_cached():
             if data.get("type") == "shift":
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
-                # Month View 簡化顯示
+                # ★ 月曆簡化顯示：課程 (老師)
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
                 
@@ -686,13 +686,14 @@ calendar_options = {
         "dayGridMonth": {"displayEventTime": False}, 
         "listMonth": {"displayEventTime": True}
     },
-    "selectable": True, # ★ 關鍵：讓點擊感應更靈敏
+    # ★ 關鍵修正：關閉 Selectable，解決點擊衝突
+    "selectable": False, 
     "scrollTime": datetime.datetime.now().strftime("%H:%M:%S")
 }
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-# ★ 修正：超強容錯日期解析
+# ★ 關鍵修正：強化日期解析，防止怪格式報錯
 if cal_return.get("dateClick"):
     clicked_date_str = cal_return["dateClick"]["date"]
     
@@ -721,7 +722,6 @@ st.subheader("📋 每日點名")
 
 selected_date = datetime.date.today()
 if cal_return and "dateClick" in cal_return:
-    # 點名區塊也要同步使用容錯解析
     clicked_date_str = cal_return["dateClick"]["date"]
     clean_date_str = clicked_date_str[:10]
     try:
@@ -736,6 +736,7 @@ for e in all_events:
     if e.get('start', '').startswith(s_date_str) and 'extendedProps' in e:
         props = e['extendedProps']
         if props.get('type') == 'shift':
+            # ★ 讀取原始 title (班級名)
             daily_courses.append(props.get('title', ''))
 
 all_students = get_students_data_cached()
@@ -813,4 +814,3 @@ if st.session_state['user']:
             st.rerun()
 else:
     st.warning("請登入以進行點名")
-
