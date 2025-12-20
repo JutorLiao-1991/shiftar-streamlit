@@ -120,16 +120,22 @@ def get_all_events_cached():
                 course = data.get("title", "課程")
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
+                
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
                 title_text = f"{staff_name}"
                 color = "#6f42c1"
+                
             elif data.get("type") == "notice":
                 category = data.get("category", "其他")
                 title_text = f"[{category}] {title_text}"
                 if category == "調課": color = "#d63384"
                 elif category == "考試": color = "#dc3545"
                 elif category == "活動": color = "#0d6efd"
+                # ★ 新增：任務分類的顏色與標示
+                elif category == "任務": 
+                    color = "#FF4500" # 鮮豔橘紅
+                    title_text = f"🔥 {title_text}"
                 else: color = "#ffc107"
             
             sanitized_props = {}
@@ -266,9 +272,10 @@ def show_edit_event_dialog(event_id, props):
             st.rerun()
             
     elif props.get('type') == 'notice':
-        cat_opts = ["調課", "考試", "活動", "其他"]
+        # ★ 加入「任務」選項
+        cat_opts = ["調課", "考試", "活動", "任務", "其他"]
         curr_cat = props.get('category', '其他')
-        idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 3
+        idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 4
         new_cat = st.selectbox("分類", cat_opts, index=idx)
         new_content = st.text_area("內容", props.get('title')) 
         col1, col2 = st.columns(2)
@@ -290,7 +297,8 @@ def show_notice_dialog(default_date=None):
         default_date = datetime.date.today()
     st.info(f"正在建立 **{default_date}** 的事項")
     edit_date = st.date_input("日期", default_date)
-    category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
+    # ★ 加入「任務」選項
+    category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "任務", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
     if st.button("發布公告", use_container_width=True):
         start_dt = datetime.datetime.combine(edit_date, datetime.time(9,0))
@@ -400,7 +408,7 @@ def show_admin_dialog():
 
     with tab2:
         st.subheader("👷 工讀生排班系統")
-        st.caption("請選擇工讀生與月份，然後直接點選日期膠囊。")
+        st.caption("請選擇工讀生與月份，然後勾選上班日期。")
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
@@ -412,30 +420,46 @@ def show_admin_dialog():
         pt_end = c_t2.selectbox("下班時間", TIME_OPTIONS, index=24, key="pt_end")
         
         st.divider()
-        st.write(f"請點選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
+        st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        # ★ 介面優化：使用 st.pills (膠囊按鈕) 取代 Checkbox Grid
-        # 這在手機上會自動換行，且很好按
+        # ★ 回歸 7 欄網格 (週曆模式：日~六)
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
+        cols = st.columns(7)
+        weekdays = ["日", "一", "二", "三", "四", "五", "六"] # 星期日開始
+        for idx, w in enumerate(weekdays):
+            cols[idx].write(f"**{w}**")
+            
+        selected_dates = []
+        # 計算 1 號是星期幾 (Python: 0=Mon, 6=Sun) -> 我們要 0=Sun, 6=Sat
+        first_day_weekday_raw = datetime.date(pt_year, pt_month, 1).weekday()
+        first_day_col_idx = (first_day_weekday_raw + 1) % 7
         
-        # 產生日期選項清單 (例如: "1", "2", "3"...)
-        day_options = [str(d) for d in range(1, num_days + 1)]
+        cols = st.columns(7)
+        col_idx = first_day_col_idx 
         
-        # 多選膠囊元件
-        selected_days = st.pills("選擇日期", day_options, selection_mode="multi")
-        
+        for day in range(1, num_days + 1):
+            curr_date = datetime.date(pt_year, pt_month, day)
+            # 取得該日期的星期幾標籤，方便手機閱讀
+            day_label = f"{day} ({weekdays[col_idx]})"
+            
+            with cols[col_idx]:
+                if st.checkbox(day_label, key=f"pt_day_{day}"):
+                    selected_dates.append(curr_date)
+            
+            col_idx += 1
+            if col_idx > 6:
+                col_idx = 0
+                cols = st.columns(7) # 換行
+                
         st.divider()
-        
-        if st.button(f"確認排入 {len(selected_days)} 個班次", type="primary", key="save_pt"):
-            if not selected_days:
-                st.error("未選擇任何日期")
+        if st.button(f"確認排入 {len(selected_dates)} 個班次", type="primary", key="save_pt"):
+            if not selected_dates:
+                st.error("未勾選任何日期")
             else:
                 t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
                 t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
                 count = 0
-                for d_str in selected_days:
-                    day_int = int(d_str)
-                    date_obj = datetime.date(pt_year, pt_month, day_int)
+                for date_obj in selected_dates:
                     start_dt = datetime.datetime.combine(date_obj, t_s)
                     end_dt = datetime.datetime.combine(date_obj, t_e)
                     add_event_to_db("工讀", start_dt, end_dt, "part_time", st.session_state['user'], staff=pt_name)
@@ -670,8 +694,7 @@ def calendar_component():
         "initialView": "listMonth",
         "height": "650px",
         "locale": "zh-tw",
-        # ★ 標題格式修正：只顯示 2-digit 年份
-        "titleFormat": {"year": "2-digit", "month": "numeric"},
+        "titleFormat": {"year": "numeric", "month": "long"},
         "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
         "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
         "views": {
