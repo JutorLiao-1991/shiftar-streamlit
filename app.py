@@ -116,16 +116,15 @@ def get_all_events_cached():
             color = "#3788d8"
             
             if data.get("type") == "shift":
-                # loc = data.get("location", "未知") # 為了手機版面整潔，隱藏教室
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
-                # ★ 修改：只顯示 課程 (老師)，去掉教室
+                # Month View 簡化顯示
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
                 
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
-                title_text = f"{staff_name}" # 只顯示名字
+                title_text = f"{staff_name}"
                 color = "#6f42c1"
                 
             elif data.get("type") == "notice":
@@ -672,10 +671,7 @@ calendar_options = {
     "initialView": "listMonth",
     "height": "650px",
     "locale": "zh-tw",
-    # ★ 標題設定：Numeric Year + Long Month = "2025年12月"
     "titleFormat": {"year": "numeric", "month": "long"},
-    
-    # ★ 24小時制設定
     "slotLabelFormat": {
         "hour": "2-digit",
         "minute": "2-digit",
@@ -686,24 +682,22 @@ calendar_options = {
         "minute": "2-digit",
         "hour12": False
     },
-    
-    # ★ View 特定設定
     "views": {
-        "dayGridMonth": {"displayEventTime": False}, # 月曆不顯示時間
-        "listMonth": {"displayEventTime": True}       # 列表顯示時間
+        "dayGridMonth": {"displayEventTime": False}, 
+        "listMonth": {"displayEventTime": True}
     },
-    
-    # ★ 強制 Scroll 到當前時間 (對 List View 有效)
+    "selectable": True, # ★ 關鍵：讓點擊感應更靈敏
     "scrollTime": datetime.datetime.now().strftime("%H:%M:%S")
 }
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-# ★ 修復：強化日期解析，防止 Z 結尾崩潰
+# ★ 修正：超強容錯日期解析
 if cal_return.get("dateClick"):
     clicked_date_str = cal_return["dateClick"]["date"]
-    # 移除可能存在的 Z，並只取 T 之前的日期部分
-    clean_date_str = clicked_date_str.replace("Z", "").split("T")[0]
+    
+    # 這裡是最重要的修正：只取前10個字元 (YYYY-MM-DD)，無視後面任何 T/Z
+    clean_date_str = clicked_date_str[:10] 
     
     try:
         date_obj = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
@@ -712,7 +706,7 @@ if cal_return.get("dateClick"):
         else:
             st.toast("請先登入才能新增事項", icon="🔒")
     except ValueError:
-        st.error(f"日期解析錯誤：{clicked_date_str}")
+        st.error(f"日期解析錯誤，原始資料：{clicked_date_str}")
 
 if cal_return.get("eventClick"):
     event_id = cal_return["eventClick"]["event"]["id"]
@@ -726,11 +720,10 @@ st.divider()
 st.subheader("📋 每日點名")
 
 selected_date = datetime.date.today()
-# 優先使用點擊的日期，否則使用今日
 if cal_return and "dateClick" in cal_return:
-    # 同樣應用修復邏輯
+    # 點名區塊也要同步使用容錯解析
     clicked_date_str = cal_return["dateClick"]["date"]
-    clean_date_str = clicked_date_str.replace("Z", "").split("T")[0]
+    clean_date_str = clicked_date_str[:10]
     try:
         selected_date = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
     except: pass
@@ -743,7 +736,6 @@ for e in all_events:
     if e.get('start', '').startswith(s_date_str) and 'extendedProps' in e:
         props = e['extendedProps']
         if props.get('type') == 'shift':
-            # 這裡我們讀取 raw title (班級名)
             daily_courses.append(props.get('title', ''))
 
 all_students = get_students_data_cached()
