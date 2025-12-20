@@ -116,16 +116,15 @@ def get_all_events_cached():
             color = "#3788d8"
             
             if data.get("type") == "shift":
-                loc = data.get("location", "未知")
+                # loc = data.get("location", "未知") # 移除教室顯示，節省空間
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
-                # 老師課程：顯示詳細資訊
-                title_text = f"[{loc}] {course} ({teacher})"
+                # ★ 修改：只顯示 課程 (老師)，去掉教室
+                title_text = f"{course} ({teacher})"
                 color = "#28a745"
                 
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
-                # ★ 修改：只顯示名字，不加前綴
                 title_text = f"{staff_name}"
                 color = "#6f42c1"
                 
@@ -672,13 +671,29 @@ calendar_options = {
     },
     "initialView": "listMonth",
     "height": "650px",
-    "locale": "zh-tw",
-    "titleFormat": {"year": "numeric", "month": "long"},
-    # ★ 關鍵：月曆隱藏時間、列表保留時間
+    # ★ 改回最精簡標題
+    "titleFormat": {"year": "2-digit", "month": "numeric"},
+    
+    # ★ 24小時制設定 (Time Grid & List View)
+    "slotLabelFormat": {
+        "hour": "2-digit",
+        "minute": "2-digit",
+        "hour12": False
+    },
+    "eventTimeFormat": {
+        "hour": "2-digit",
+        "minute": "2-digit",
+        "hour12": False
+    },
+    
+    # ★ View 特定設定
     "views": {
-        "dayGridMonth": {"displayEventTime": False},
-        "listMonth": {"displayEventTime": True}
-    }
+        "dayGridMonth": {"displayEventTime": False}, # 月曆不顯示時間
+        "listMonth": {"displayEventTime": True}       # 列表顯示時間
+    },
+    
+    # ★ 強制 Scroll 到當前時間 (對 List View 有效)
+    "scrollTime": datetime.datetime.now().strftime("%H:%M:%S")
 }
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
@@ -715,15 +730,11 @@ for e in all_events:
     if e.get('start', '').startswith(s_date_str) and 'extendedProps' in e:
         props = e['extendedProps']
         if props.get('type') == 'shift':
-            # ★ 為了讓點名系統能運作，這裡我們讀取 raw title (班級名)
-            # 在資料庫存入時，title 就是班級名 (例如 "國二英文")
-            # extendedProps 是原始 data 的拷貝，所以這裡讀到的會是 "國二英文"
             daily_courses.append(props.get('title', ''))
 
 all_students = get_students_data_cached()
 target_students = []
 if daily_courses:
-    # 顯示給使用者看
     st.write(f"📅 今日課程：{'、'.join(daily_courses)}")
     for stu in all_students:
         if stu.get('班別') in daily_courses:
