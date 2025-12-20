@@ -82,7 +82,6 @@ def save_students_data(new_data_list):
     get_students_data_cached.clear()
     st.toast("學生名單已更新")
 
-# ★ 新增：工讀生名單管理
 @st.cache_data(ttl=300)
 def get_part_timers_list_cached():
     doc = db.collection("settings").document("part_timers").get()
@@ -120,12 +119,14 @@ def get_all_events_cached():
                 loc = data.get("location", "未知")
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
+                # 老師課程：顯示詳細資訊
                 title_text = f"[{loc}] {course} ({teacher})"
                 color = "#28a745"
                 
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
-                title_text = f"👷 工讀：{staff_name}"
+                # ★ 修改：只顯示名字，不加前綴
+                title_text = f"{staff_name}"
                 color = "#6f42c1"
                 
             elif data.get("type") == "notice":
@@ -170,10 +171,9 @@ def get_all_events_cached():
     return events
 
 def add_event_to_db(title, start, end, type, user, location="", teacher_name="", category="", staff=""):
-    # staff 參數用於工讀生
     db.collection("shifts").add({
         "title": title, "start": start.isoformat(), "end": end.isoformat(),
-        "type": type, "staff": staff if staff else user, # 若指定 staff (工讀生) 則存入，否則存操作者
+        "type": type, "staff": staff if staff else user, 
         "location": location, 
         "teacher": teacher_name, "category": category,
         "created_at": datetime.datetime.now()
@@ -251,7 +251,6 @@ def show_edit_event_dialog(event_id, props):
     if props.get('type') == 'shift':
         new_title = st.text_input("課程名稱", props.get('title'))
         st.caption("💡 如需修改時間、老師或教室，建議直接刪除後重新排課。")
-        
         col1, col2 = st.columns(2)
         if col1.button("💾 儲存修改", type="primary"):
             update_event_in_db(event_id, {"title": new_title})
@@ -263,7 +262,6 @@ def show_edit_event_dialog(event_id, props):
     elif props.get('type') == 'part_time':
         st.info("工讀生班表")
         new_staff = st.text_input("工讀生姓名", props.get('staff'))
-        
         col1, col2 = st.columns(2)
         if col1.button("💾 儲存修改", type="primary"):
             update_event_in_db(event_id, {"staff": new_staff})
@@ -276,10 +274,8 @@ def show_edit_event_dialog(event_id, props):
         cat_opts = ["調課", "考試", "活動", "其他"]
         curr_cat = props.get('category', '其他')
         idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 3
-        
         new_cat = st.selectbox("分類", cat_opts, index=idx)
         new_content = st.text_area("內容", props.get('title')) 
-        
         col1, col2 = st.columns(2)
         if col1.button("💾 儲存修改", type="primary"):
             update_event_in_db(event_id, {"title": new_content, "category": new_cat})
@@ -297,11 +293,9 @@ def show_edit_event_dialog(event_id, props):
 def show_notice_dialog(default_date=None):
     if default_date is None:
         default_date = datetime.date.today()
-        
     st.info(f"正在建立 **{default_date}** 的事項")
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
-    
     if st.button("發布公告", use_container_width=True):
         start_dt = datetime.datetime.combine(default_date, datetime.time(9,0))
         end_dt = datetime.datetime.combine(default_date, datetime.time(10,0))
@@ -324,7 +318,6 @@ def show_promotion_confirm_dialog():
             new_stu['年級'] = new_grade
             updated_list.append(new_stu)
             if old_grade != new_grade: promoted_count += 1
-                
         save_students_data(updated_list)
         st.success(f"成功升級 {promoted_count} 位學生！")
         st.rerun()
@@ -412,43 +405,32 @@ def show_admin_dialog():
     with tab2:
         st.subheader("👷 工讀生排班系統")
         st.caption("請選擇工讀生與月份，然後勾選上班日期。")
-        
-        # 取得工讀生名單
         part_timers_list = get_part_timers_list_cached()
-        
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
-        
         c_y, c_m = c_pt2.columns(2)
         pt_year = c_y.number_input("年份", value=datetime.date.today().year, key="pt_year")
         pt_month = c_m.number_input("月份", value=datetime.date.today().month, min_value=1, max_value=12, key="pt_month")
-        
         c_t1, c_t2 = st.columns(2)
         pt_start = c_t1.selectbox("上班時間", TIME_OPTIONS, index=18, key="pt_start")
         pt_end = c_t2.selectbox("下班時間", TIME_OPTIONS, index=24, key="pt_end")
         
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
-        
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         cols = st.columns(7)
         weekdays = ["一", "二", "三", "四", "五", "六", "日"]
         for idx, w in enumerate(weekdays):
             cols[idx].write(f"**{w}**")
-            
         selected_dates = []
         first_day_weekday = datetime.date(pt_year, pt_month, 1).weekday()
-        
         cols = st.columns(7)
         col_idx = first_day_weekday 
-        
         for day in range(1, num_days + 1):
             curr_date = datetime.date(pt_year, pt_month, day)
             with cols[col_idx]:
-                # ★ 修正：去掉「日」
                 if st.checkbox(f"{day}", key=f"pt_day_{day}"):
                     selected_dates.append(curr_date)
-            
             col_idx += 1
             if col_idx > 6:
                 col_idx = 0
@@ -510,10 +492,8 @@ def show_admin_dialog():
                 show_promotion_confirm_dialog()
         
         st.divider()
-        # ★ 新增：工讀生名單管理區塊
         st.subheader("👷 工讀生名單管理")
         current_pts = get_part_timers_list_cached()
-        
         c_p1, c_p2 = st.columns([2, 1])
         new_pt = c_p1.text_input("輸入新工讀生姓名")
         if c_p2.button("新增工讀生"):
@@ -521,8 +501,6 @@ def show_admin_dialog():
                 current_pts.append(new_pt)
                 save_part_timers_list(current_pts)
                 st.rerun()
-        
-        # 刪除工讀生
         pts_to_del = st.multiselect("刪除工讀生", current_pts)
         if pts_to_del and st.button("確認刪除工讀生"):
             new_list = [p for p in current_pts if p not in pts_to_del]
@@ -695,7 +673,12 @@ calendar_options = {
     "initialView": "listMonth",
     "height": "650px",
     "locale": "zh-tw",
-    "titleFormat": {"year": "numeric", "month": "long"}
+    "titleFormat": {"year": "numeric", "month": "long"},
+    # ★ 關鍵：月曆隱藏時間、列表保留時間
+    "views": {
+        "dayGridMonth": {"displayEventTime": False},
+        "listMonth": {"displayEventTime": True}
+    }
 }
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
@@ -732,22 +715,15 @@ for e in all_events:
     if e.get('start', '').startswith(s_date_str) and 'extendedProps' in e:
         props = e['extendedProps']
         if props.get('type') == 'shift':
-            # 這裡我們需要把 get_all_events_cached 裡面加工過的 title 邏輯倒回來嗎？
-            # 其實不用，因為我們在排班時，title 存的是「班別名稱」
-            # get_all_events_cached 只是在「顯示」時加上了 [教室] 
-            # 但它存進 extendedProps 的是原始的 data，而 data['title'] 是原始班別名
-            # 所以這裡讀取 props.get('title') 應該是正確的班別名
-            
-            # 不過，我們需要確認 get_all_events_cached 是怎麼處理 extendedProps 的
-            # 它直接把 data 塞進去： "extendedProps": sanitized_props
-            # 而 sanitized_props 是 data 的複製
-            # 所以 extendedProps['title'] 就是原始資料庫裡的 title (即班別名稱)
+            # ★ 為了讓點名系統能運作，這裡我們讀取 raw title (班級名)
+            # 在資料庫存入時，title 就是班級名 (例如 "國二英文")
+            # extendedProps 是原始 data 的拷貝，所以這裡讀到的會是 "國二英文"
             daily_courses.append(props.get('title', ''))
 
 all_students = get_students_data_cached()
 target_students = []
 if daily_courses:
-    # 這裡顯示給使用者看，用逗號分隔
+    # 顯示給使用者看
     st.write(f"📅 今日課程：{'、'.join(daily_courses)}")
     for stu in all_students:
         if stu.get('班別') in daily_courses:
