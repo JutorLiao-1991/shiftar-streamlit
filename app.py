@@ -118,15 +118,12 @@ def get_all_events_cached():
             if data.get("type") == "shift":
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
-                # 月曆簡化顯示
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
-                
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
                 title_text = f"{staff_name}"
                 color = "#6f42c1"
-                
             elif data.get("type") == "notice":
                 category = data.get("category", "其他")
                 title_text = f"[{category}] {title_text}"
@@ -292,8 +289,6 @@ def show_notice_dialog(default_date=None):
     if default_date is None:
         default_date = datetime.date.today()
     st.info(f"正在建立 **{default_date}** 的事項")
-    
-    # 讓使用者可以在此彈窗修改日期
     edit_date = st.date_input("日期", default_date)
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
@@ -405,7 +400,7 @@ def show_admin_dialog():
 
     with tab2:
         st.subheader("👷 工讀生排班系統")
-        st.caption("請選擇工讀生與月份，然後勾選上班日期。")
+        st.caption("請選擇工讀生與月份，然後直接點選日期膠囊。")
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
@@ -417,35 +412,30 @@ def show_admin_dialog():
         pt_end = c_t2.selectbox("下班時間", TIME_OPTIONS, index=24, key="pt_end")
         
         st.divider()
-        st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
+        st.write(f"請點選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
+        
+        # ★ 介面優化：使用 st.pills (膠囊按鈕) 取代 Checkbox Grid
+        # 這在手機上會自動換行，且很好按
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
-        cols = st.columns(7)
-        weekdays = ["一", "二", "三", "四", "五", "六", "日"]
-        for idx, w in enumerate(weekdays):
-            cols[idx].write(f"**{w}**")
-        selected_dates = []
-        first_day_weekday = datetime.date(pt_year, pt_month, 1).weekday()
-        cols = st.columns(7)
-        col_idx = first_day_weekday 
-        for day in range(1, num_days + 1):
-            curr_date = datetime.date(pt_year, pt_month, day)
-            with cols[col_idx]:
-                if st.checkbox(f"{day}", key=f"pt_day_{day}"):
-                    selected_dates.append(curr_date)
-            col_idx += 1
-            if col_idx > 6:
-                col_idx = 0
-                cols = st.columns(7)
-                
+        
+        # 產生日期選項清單 (例如: "1", "2", "3"...)
+        day_options = [str(d) for d in range(1, num_days + 1)]
+        
+        # 多選膠囊元件
+        selected_days = st.pills("選擇日期", day_options, selection_mode="multi")
+        
         st.divider()
-        if st.button(f"確認排入 {len(selected_dates)} 個班次", type="primary", key="save_pt"):
-            if not selected_dates:
-                st.error("未勾選任何日期")
+        
+        if st.button(f"確認排入 {len(selected_days)} 個班次", type="primary", key="save_pt"):
+            if not selected_days:
+                st.error("未選擇任何日期")
             else:
                 t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
                 t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
                 count = 0
-                for date_obj in selected_dates:
+                for d_str in selected_days:
+                    day_int = int(d_str)
+                    date_obj = datetime.date(pt_year, pt_month, day_int)
                     start_dt = datetime.datetime.combine(date_obj, t_s)
                     end_dt = datetime.datetime.combine(date_obj, t_e)
                     add_event_to_db("工讀", start_dt, end_dt, "part_time", st.session_state['user'], staff=pt_name)
@@ -680,26 +670,22 @@ def calendar_component():
         "initialView": "listMonth",
         "height": "650px",
         "locale": "zh-tw",
-        "titleFormat": {"year": "numeric", "month": "long"},
+        # ★ 標題格式修正：只顯示 2-digit 年份
+        "titleFormat": {"year": "2-digit", "month": "numeric"},
         "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
         "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
         "views": {
             "dayGridMonth": {"displayEventTime": False}, 
             "listMonth": {"displayEventTime": True}
         },
-        # ★ 關鍵：恢復 selectable: True 讓點擊有反應
         "selectable": True,
-        # ★ 移除 scrollTime 避免干擾
     }
 
     cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-    # ★ 關鍵：超強日期解析
     if cal_return.get("dateClick"):
         clicked_date_str = cal_return["dateClick"]["date"]
-        # 只取前10碼 (YYYY-MM-DD)，無視任何雜訊
         clean_date_str = clicked_date_str[:10]
-        
         try:
             date_obj = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
             if st.session_state['user']:
@@ -724,12 +710,10 @@ st.divider()
 st.subheader("📋 每日點名")
 
 selected_date = datetime.date.today()
-# 為了避免 Fragment 內部的 state 無法傳遞出來，我們這裡維持預設為今日
 st.info(f"日期：**{selected_date}**")
 
 daily_courses = []
 s_date_str = selected_date.isoformat()
-# 注意：這裡要重新讀取一次事件，因為上面的 all_events 是在 Fragment 裡
 all_events_main = get_all_events_cached()
 
 for e in all_events_main:
