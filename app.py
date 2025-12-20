@@ -1,18 +1,16 @@
 import streamlit as st
 from streamlit_calendar import calendar
 import datetime
+from dateutil.relativedelta import relativedelta # 用來處理月份計算
 import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
 import json
-import pytz # 用來處理時區
+import pytz
 
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# 初始化 Session State (用於點名系統暫存)
-if 'attendance_state' not in st.session_state:
-    st.session_state['attendance_state'] = {}
 if 'user' not in st.session_state:
     st.session_state['user'] = None
 if 'is_admin' not in st.session_state:
@@ -32,26 +30,41 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-# --- 2. 身份與全域變數 ---
+# --- 2. 身份與常數定義 ---
 ADMINS = ["鳩特", "鳩婆"]
-STAFFS = ["世軒", "竣揚", "暐傑"]
-ALL_USERS = ADMINS + STAFFS
-CLEANERS = STAFFS
-STUDENTS_LIST = ["王小明", "李小華", "陳大文", "張三", "李四", "測試學生A", "測試學生B"] # 之後可從 DB 讀取
+# 預設時間選單 (09:00 - 22:00, 間隔 30 分)
+TIME_SLOTS = []
+for h in range(9, 22):
+    TIME_SLOTS.append(datetime.time(h, 0))
+    TIME_SLOTS.append(datetime.time(h, 30))
+TIME_SLOTS.append(datetime.time(22, 0)) # 結束時間可以是 22:00
 
-# --- 3. 核心邏輯函數 ---
+# --- 3. 資料庫存取函數 (新增：老師與學生管理) ---
 
-# A. 自動登出機制 (01:00 AM 強制登出)
-def check_auto_logout():
-    tw_tz = pytz.timezone('Asia/Taipei')
-    now = datetime.datetime.now(tw_tz)
-    # 如果現在時間大於 01:00 且 小於 05:00 (避免整天無法登入)，且目前是登入狀態
-    if 1 <= now.hour < 5 and st.session_state['user'] is not None:
-        st.session_state['user'] = None
-        st.session_state['is_admin'] = False
-        st.rerun()
+# A. 取得/更新 老師設定 (包含薪資)
+def get_teachers_data():
+    docs = db.collection("teachers_config").stream()
+    teachers = {}
+    for doc in docs:
+        teachers[doc.id] = doc.to_dict()
+    return teachers
 
-# B. Firebase 操作
+def save_teacher_data(name, rate):
+    db.collection("teachers_config").document(name).set({"rate": rate})
+    st.toast(f"已更新 {name} 的薪資設定")
+
+# B. 取得/更新 學生名單
+def get_students_list():
+    doc = db.collection("settings").document("students").get()
+    if doc.exists:
+        return doc.to_dict().get("list", [])
+    return ["範例學生A", "範例學生B"]
+
+def save_students_list(new_list):
+    db.collection("settings").document("students").set({"list": new_list})
+    st.toast("學生名單已更新")
+
+# C. 既有功能
 def get_cleaning_status(area_name):
     doc = db.collection("latest_cleaning_status").document(area_name).get()
     return doc.to_dict() if doc.exists else None
@@ -62,10 +75,12 @@ def log_cleaning(area, user):
     db.collection("latest_cleaning_status").document(area).set({"area": area, "staff": user, "timestamp": now})
     st.toast(f"✨ {area} 清潔完成！", icon="🧹")
 
-def add_event_to_db(title, start, end, type, user, location=""):
+def add_event_to_db(title, start, end, type, user, location="", teacher_name=""):
     db.collection("shifts").add({
         "title": title, "start": start.isoformat(), "end": end.isoformat(),
-        "type": type, "staff": user, "location": location, "created_at": datetime.datetime.now()
+        "type": type, "staff": user, "location": location, 
+        "teacher": teacher_name, # 紀錄實際上課老師，方便算薪水
+        "created_at": datetime.datetime.now()
     })
 
 def get_all_events():
@@ -102,11 +117,65 @@ def get_all_events():
     except: pass
     return events
 
+# D. 薪資計算邏輯
+def calculate_salary(year, month):
+    start_date = datetime.datetime(year, month, 1)
+    # 下個月1號減1秒 = 本月最後一刻
+    end_date = start_date + relativedelta(months=1)
+    
+    # 從資料庫抓薪資設定
+    teachers_cfg = get_teachers_data()
+    
+    # 抓取該月份所有排課
+    # 注意：Firestore 字串比較日期簡單有效
+    start_str = start_date.isoformat()
+    end_str = end_date.isoformat()
+    
+    docs = db.collection("shifts").where("type", "==", "shift")\
+             .where("start", ">=", start_str).where("start", "<", end_str).stream()
+    
+    salary_report = {}
+    
+    for doc in docs:
+        data = doc.to_dict()
+        teacher = data.get("teacher", "未知") # 讀取排課時設定的老師
+        
+        # 排除鳩特家族
+        if teacher in ["鳩特", "鳩婆", "未知"]:
+            continue
+            
+        if teacher not in salary_report:
+            salary_report[teacher] = {"count": 0, "rate": teachers_cfg.get(teacher, {}).get("rate", 0)}
+            
+        salary_report[teacher]["count"] += 1
+        
+    # 計算總額
+    results = []
+    total_payout = 0
+    for name, info in salary_report.items():
+        subtotal = info["count"] * info["rate"]
+        total_payout += subtotal
+        results.append({
+            "姓名": name,
+            "單價": info["rate"],
+            "堂數": info["count"],
+            "應發薪資": subtotal
+        })
+        
+    return results, total_payout
+
 # --- 4. 彈出視窗 UI (@st.dialog) ---
 
 @st.dialog("👤 人員登入")
 def show_login_dialog():
-    user = st.selectbox("請選擇您的身份", ["請選擇"] + ALL_USERS)
+    # 這裡的選單改為動態讀取老師列表 + 管理員
+    teachers_cfg = get_teachers_data()
+    staff_list = list(teachers_cfg.keys()) # 從資料庫讀老師名字
+    all_login_users = ADMINS + staff_list
+    # 去除重複
+    all_login_users = list(set(all_login_users))
+    
+    user = st.selectbox("請選擇您的身份", ["請選擇"] + all_login_users)
     password = ""
     if user in ADMINS:
         password = st.text_input("請輸入管理員密碼", type="password")
@@ -124,7 +193,9 @@ def show_login_dialog():
 @st.dialog("🧹 環境清潔登記")
 def show_cleaning_dialog(area_name):
     st.write(f"登記 **{area_name}** 清潔")
-    cleaner = st.selectbox("清潔人員", CLEANERS)
+    teachers_cfg = get_teachers_data()
+    staff_list = list(teachers_cfg.keys())
+    cleaner = st.selectbox("清潔人員", staff_list)
     if st.button("確認已掃拖", use_container_width=True):
         log_cleaning(area_name, cleaner)
         st.rerun()
@@ -140,38 +211,118 @@ def show_notice_dialog():
         st.toast("公告已發布")
         st.rerun()
 
-@st.dialog("📅 排課系統 (管理員)")
-def show_shift_dialog():
-    c1, c2 = st.columns(2)
-    s_date = c1.date_input("日期")
-    s_teacher = c2.text_input("師資", st.session_state['user'])
-    c3, c4 = st.columns(2)
-    s_start = c3.time_input("開始", datetime.time(18,0))
-    s_end = c4.time_input("結束", datetime.time(21,0))
+@st.dialog("⚙️ 管理員後台")
+def show_admin_dialog():
+    tab1, tab2, tab3 = st.tabs(["📅 排課系統", "💰 薪資結算", "📝 資料設定"])
     
-    s_location = st.selectbox("教室", ["大教室", "小教室", "流放教室", "線上"])
-    s_title = st.text_input("課程名稱")
-    is_repeat = st.checkbox("每週重複 (自動排 4 週)")
+    # 1. 取得最新資料
+    teachers_cfg = get_teachers_data()
+    teacher_names = list(teachers_cfg.keys())
+    # 確保當前使用者(如果是老師)也在名單內
+    if st.session_state['user'] not in teacher_names and st.session_state['user'] not in ADMINS:
+         teacher_names.append(st.session_state['user'])
     
-    if st.button("新增課程", use_container_width=True):
-        start_dt = datetime.datetime.combine(s_date, s_start)
-        end_dt = datetime.datetime.combine(s_date, s_end)
-        full_title = f"[{s_location}] {s_teacher} - {s_title}"
-        add_event_to_db(full_title, start_dt, end_dt, "shift", st.session_state['user'], s_location)
-        if is_repeat:
-            for i in range(1, 4):
-                next_start = start_dt + datetime.timedelta(weeks=i)
-                next_end = end_dt + datetime.timedelta(weeks=i)
-                add_event_to_db(full_title, next_start, next_end, "shift", st.session_state['user'], s_location)
-        st.toast("課程已安排！")
-        st.rerun()
+    # TAB 1: 排課
+    with tab1:
+        c1, c2 = st.columns(2)
+        s_date = c1.date_input("日期")
+        # 師資選擇 (從資料庫讀取)
+        s_teacher = c2.selectbox("授課師資", ["請選擇"] + ADMINS + teacher_names, index=0)
+        
+        c3, c4 = st.columns(2)
+        # 時間選擇改為 Selectbox，限制範圍
+        s_start = c3.selectbox("開始時間", TIME_SLOTS, index=18) # 預設 18:00 (index 18)
+        s_end = c4.selectbox("結束時間", TIME_SLOTS, index=24) # 預設 21:00 (index 24)
+        
+        s_location = st.selectbox("教室", ["大教室", "小教室", "流放教室", "線上"])
+        s_title = st.text_input("課程名稱")
+        is_repeat = st.checkbox("每週重複 (自動排 4 週)")
+        
+        if st.button("新增課程", type="primary", use_container_width=True):
+            if s_teacher == "請選擇":
+                st.error("請選擇師資")
+            elif s_start >= s_end:
+                st.error("結束時間必須晚於開始時間")
+            else:
+                start_dt = datetime.datetime.combine(s_date, s_start)
+                end_dt = datetime.datetime.combine(s_date, s_end)
+                full_title = f"[{s_location}] {s_teacher} - {s_title}"
+                
+                # 寫入第一週
+                add_event_to_db(full_title, start_dt, end_dt, "shift", st.session_state['user'], s_location, s_teacher)
+                
+                if is_repeat:
+                    for i in range(1, 4):
+                        next_start = start_dt + datetime.timedelta(weeks=i)
+                        next_end = end_dt + datetime.timedelta(weeks=i)
+                        add_event_to_db(full_title, next_start, next_end, "shift", st.session_state['user'], s_location, s_teacher)
+                st.toast("課程已安排！")
+                st.rerun()
+    
+    # TAB 2: 薪資結算
+    with tab2:
+        st.caption("計算該月份『Shift』類型的課程數量 (不包含鳩特/鳩婆)")
+        col_m1, col_m2 = st.columns(2)
+        q_year = col_m1.number_input("年份", value=datetime.date.today().year)
+        q_month = col_m2.number_input("月份", value=datetime.date.today().month, min_value=1, max_value=12)
+        
+        if st.button("計算本月薪資"):
+            results, total = calculate_salary(q_year, q_month)
+            if results:
+                st.dataframe(results, use_container_width=True)
+                st.metric("本月總發放薪資", f"${total:,}")
+            else:
+                st.info("本月尚無須發放薪資的紀錄")
+
+    # TAB 3: 資料設定 (師資與學生)
+    with tab3:
+        st.subheader("👨‍🏫 師資與薪資管理")
+        with st.form("add_teacher"):
+            c_t1, c_t2 = st.columns([2, 1])
+            new_t_name = c_t1.text_input("老師姓名")
+            new_t_rate = c_t2.number_input("單堂/時薪", min_value=0, step=100)
+            if st.form_submit_button("新增/更新 老師資料"):
+                if new_t_name:
+                    save_teacher_data(new_t_name, new_t_rate)
+                    st.rerun()
+        
+        # 顯示目前老師列表 (簡單版)
+        st.caption("目前系統內的老師 (不含鳩特家族)")
+        st.json(teachers_cfg, expanded=False)
+
+        st.divider()
+
+        st.subheader("🎓 學生名單管理")
+        current_students = get_students_list()
+        
+        # 新增學生
+        new_student = st.text_input("新增學生姓名 (按 Enter 新增)", key="new_stu_input")
+        if new_student:
+            if new_student not in current_students:
+                current_students.append(new_student)
+                save_students_list(current_students)
+                st.rerun()
+        
+        # 刪除學生 (用多選框)
+        to_remove = st.multiselect("選擇要移除的學生", current_students)
+        if to_remove:
+            if st.button("確認移除選取學生"):
+                for s in to_remove:
+                    current_students.remove(s)
+                save_students_list(current_students)
+                st.rerun()
 
 # --- 5. 主介面邏輯 ---
 
-# 執行自動登出檢查
-check_auto_logout()
+# 自動登出 (01:00 - 05:00)
+tz = pytz.timezone('Asia/Taipei')
+now = datetime.datetime.now(tz)
+if 1 <= now.hour < 5 and st.session_state['user'] is not None:
+    st.session_state['user'] = None
+    st.session_state['is_admin'] = False
+    st.rerun()
 
-# 標題與登入按鈕區 (使用 columns 排版)
+# 標題與登入
 col_title, col_login = st.columns([3, 1], vertical_alignment="center")
 with col_title:
     st.title("🏫 鳩特數理行政班表")
@@ -188,11 +339,10 @@ with col_login:
 
 st.divider()
 
-# 環境整潔監控 (改良版)
+# 環境整潔 (沿用)
 st.subheader("🧹 環境整潔監控")
 clean_cols = st.columns(4)
 areas = ["櫃檯茶水間", "大教室", "小教室", "流放教室"]
-
 for i, area in enumerate(areas):
     status = get_cleaning_status(area)
     days_diff = "N/A"
@@ -215,7 +365,7 @@ for i, area in enumerate(areas):
 
 st.divider()
 
-# 操作按鈕區 (僅登入顯示)
+# 按鈕區
 if st.session_state['user']:
     btn_c1, btn_c2 = st.columns(2)
     with btn_c1:
@@ -223,8 +373,8 @@ if st.session_state['user']:
             show_notice_dialog()
     with btn_c2:
         if st.session_state['is_admin']:
-            if st.button("📅 新增排課", use_container_width=True):
-                show_shift_dialog()
+            if st.button("⚙️ 管理員後台 (排課/薪資/設定)", type="primary", use_container_width=True):
+                show_admin_dialog()
 
 # 行事曆
 all_events = get_all_events()
@@ -236,78 +386,58 @@ calendar_options = {
 }
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick'])
 
-# --- 6. 點名系統 (手機版特別優化) ---
+# --- 6. 點名系統 ---
 st.divider()
 st.subheader("📋 每日點名")
 
-# 1. 取得選擇的日期
 selected_date = datetime.date.today()
 if cal_return and "dateClick" in cal_return:
-    # --- BUG FIX: 這裡加了 split("T")[0] 來處理可能的時間字串 ---
     clicked_date_str = cal_return["dateClick"]["date"].split("T")[0]
     selected_date = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
 
 st.info(f"正在進行 **{selected_date}** 的點名")
 
-# 2. 準備點名資料 (使用 Session State 暫存，避免畫面重整資料不見)
 date_key = str(selected_date)
-if date_key not in st.session_state['attendance_state']:
-    # 預設所有人都在「未到」
-    st.session_state['attendance_state'][date_key] = {
-        "absent": STUDENTS_LIST.copy(),
+if date_key not in st.session_state:
+    st.session_state[date_key] = {
+        "absent": get_students_list(), # 動態讀取學生名單
         "present": [],
         "leave": []
     }
 
-current_data = st.session_state['attendance_state'][date_key]
+current_data = st.session_state[date_key]
 
-# 3. 三欄式點名介面 (手機上 Columns 會自動變成直排，很好按)
 if st.session_state['user']:
     with st.expander("展開點名表", expanded=True):
         col_absent, col_present, col_leave = st.columns(3)
-
-        # 欄位 1: 未到 (點擊 -> 變已到)
         with col_absent:
             st.markdown("### 🔴 未到")
-            st.caption("點擊名字移至已到")
             for student in current_data['absent']:
                 if st.button(f"👤 {student}", key=f"abs_{student}_{date_key}", use_container_width=True):
                     current_data['absent'].remove(student)
                     current_data['present'].append(student)
                     st.rerun()
-
-        # 欄位 2: 已到 (點擊 -> 變未到)
         with col_present:
             st.markdown("### 🟢 已到")
-            st.caption("點擊名字取消")
             for student in current_data['present']:
                 if st.button(f"✅ {student}", key=f"pre_{student}_{date_key}", type="primary", use_container_width=True):
                     current_data['present'].remove(student)
                     current_data['absent'].append(student)
                     st.rerun()
-
-        # 欄位 3: 請假 (手動選擇)
         with col_leave:
             st.markdown("### 🟡 請假/其他")
-            # 這裡用選單來移動，因為「未到」可能很多，直接移動到請假比較快
-            move_to_leave = st.selectbox("選擇請假學生", ["選擇..."] + current_data['absent'], key=f"sel_leave_{date_key}")
+            move_to_leave = st.selectbox("選擇請假", ["選擇..."] + current_data['absent'], key=f"sel_leave_{date_key}")
             if move_to_leave != "選擇...":
                 current_data['absent'].remove(move_to_leave)
                 current_data['leave'].append(move_to_leave)
                 st.rerun()
-            
-            # 顯示請假名單 (點擊還原)
             for student in current_data['leave']:
                 if st.button(f"🤒 {student}", key=f"lea_{student}_{date_key}", use_container_width=True):
                     current_data['leave'].remove(student)
                     current_data['absent'].append(student)
                     st.rerun()
 
-    # 送出按鈕
     if st.button("💾 儲存今日點名紀錄", type="primary", use_container_width=True):
-        # 這裡將資料寫入 Firebase
-        # db.collection("attendance").add({ ... })
         st.success(f"已儲存：出席 {len(current_data['present'])} 人，請假 {len(current_data['leave'])} 人")
-
 else:
     st.warning("請登入以進行點名")
