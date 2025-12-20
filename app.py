@@ -68,11 +68,7 @@ def get_teachers_data():
 
 def save_teacher_data(name, rate):
     db.collection("teachers_config").document(name).set({"rate": rate})
-    st.toast(f"已更新 {name} 的資料")
-
-def delete_teacher_data(name):
-    db.collection("teachers_config").document(name).delete()
-    st.toast(f"已移除 {name}")
+    st.toast(f"已更新 {name} 的薪資設定")
 
 @st.cache_data(ttl=300)
 def get_students_data_cached():
@@ -120,10 +116,9 @@ def get_all_events_cached():
             color = "#3788d8"
             
             if data.get("type") == "shift":
-                # loc = data.get("location", "未知") 
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
-                # 顯示：課程 (老師)
+                # ★ 顯示：課程 (老師)
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
                 
@@ -460,24 +455,16 @@ def show_admin_dialog():
         q_year = col_m1.number_input("年份", value=datetime.date.today().year, key="sal_y")
         q_month = col_m2.number_input("月份", value=datetime.date.today().month, min_value=1, max_value=12, key="sal_m")
         if st.button("計算本月薪資"):
-            # ★ 修正 Bug: 移除 composite query，改為 Python 內過濾
             start_date = datetime.datetime(q_year, q_month, 1)
             end_date = start_date + relativedelta(months=1)
             start_str = start_date.isoformat()
             end_str = end_date.isoformat()
-            
-            # 1. 只篩選時間 (不篩選 type) -> 避開 FailedPrecondition
-            docs = db.collection("shifts")\
-                     .where("start", ">=", start_str).where("start", "<", end_str).stream()
-            
+            docs = db.collection("shifts").where("start", ">=", start_str).where("start", "<", end_str).stream()
             teachers_cfg = get_teachers_data()
             report = {}
             for doc in docs:
                 d = doc.to_dict()
-                # 2. 在這裡過濾 type
-                if d.get("type") != "shift": 
-                    continue
-                    
+                if d.get("type") != "shift": continue
                 t_name = d.get("teacher", "未知")
                 if t_name in ADMINS or t_name == "未知": continue
                 if t_name not in report:
@@ -519,12 +506,8 @@ def show_admin_dialog():
             st.rerun()
 
         st.divider()
-        # ★ 修正：將師資管理功能做得更完整
         st.subheader("👨‍🏫 師資名單管理")
-        
-        # 顯示目前列表
         current_teachers = list(get_teachers_data().keys())
-        
         c_t1, c_t2, c_t3 = st.columns([2, 1, 1])
         new_t_name = c_t1.text_input("老師姓名")
         new_t_rate = c_t2.number_input("單價", min_value=0, step=100)
@@ -532,12 +515,10 @@ def show_admin_dialog():
             if new_t_name:
                 save_teacher_data(new_t_name, new_t_rate)
                 st.rerun()
-                
-        # 刪除老師
         t_to_del = st.multiselect("選擇要移除的老師", current_teachers)
         if t_to_del and st.button("確認移除選取老師"):
             for t in t_to_del:
-                delete_teacher_data(t)
+                db.collection("teachers_config").document(t).delete()
             st.rerun()
 
         st.divider()
@@ -693,7 +674,8 @@ calendar_options = {
         "center": "title",
         "right": "listMonth,dayGridMonth"
     },
-    "initialView": "listMonth",
+    # ★ 關鍵修正：預設視圖改回 'dayGridMonth'，解決點擊跳轉問題
+    "initialView": "dayGridMonth",
     "height": "650px",
     "locale": "zh-tw",
     "titleFormat": {"year": "2-digit", "month": "numeric"},
@@ -711,6 +693,8 @@ calendar_options = {
         "dayGridMonth": {"displayEventTime": False},
         "listMonth": {"displayEventTime": True}
     },
+    # ★ 關鍵修正：關閉 navLinks，防止點擊數字跳轉
+    "navLinks": False,
     "scrollTime": datetime.datetime.now().strftime("%H:%M:%S")
 }
 
