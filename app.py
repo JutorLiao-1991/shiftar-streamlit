@@ -118,7 +118,7 @@ def get_all_events_cached():
             if data.get("type") == "shift":
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
-                # ★ 顯示：課程 (老師)
+                # 課程 (老師)
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
                 
@@ -292,8 +292,11 @@ def show_notice_dialog(default_date=None):
     if default_date is None:
         default_date = datetime.date.today()
     st.info(f"正在建立 **{default_date}** 的事項")
+    
+    # ★ 這裡就是你要的分類選單
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
+    
     if st.button("發布公告", use_container_width=True):
         start_dt = datetime.datetime.combine(default_date, datetime.time(9,0))
         end_dt = datetime.datetime.combine(default_date, datetime.time(10,0))
@@ -674,7 +677,7 @@ calendar_options = {
         "center": "title",
         "right": "listMonth,dayGridMonth"
     },
-    # ★ 關鍵修正：預設視圖改回 'dayGridMonth'，解決點擊跳轉問題
+    # ★ 關鍵：預設為 Month View
     "initialView": "dayGridMonth",
     "height": "650px",
     "locale": "zh-tw",
@@ -693,13 +696,15 @@ calendar_options = {
         "dayGridMonth": {"displayEventTime": False},
         "listMonth": {"displayEventTime": True}
     },
-    # ★ 關鍵修正：關閉 navLinks，防止點擊數字跳轉
+    # ★ 關鍵：關閉 navLinks，防止誤觸跳轉，並啟用 selectable 讓整格可點
     "navLinks": False,
+    "selectable": True,
     "scrollTime": datetime.datetime.now().strftime("%H:%M:%S")
 }
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
+# ★ 點擊日期 -> 彈出新增視窗
 if cal_return.get("dateClick"):
     clicked_date_str = cal_return["dateClick"]["date"].split("T")[0]
     date_obj = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
