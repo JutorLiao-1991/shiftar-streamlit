@@ -118,15 +118,12 @@ def get_all_events_cached():
             if data.get("type") == "shift":
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
-                # 月曆簡化顯示
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
-                
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
                 title_text = f"{staff_name}"
                 color = "#6f42c1"
-                
             elif data.get("type") == "notice":
                 category = data.get("category", "其他")
                 title_text = f"[{category}] {title_text}"
@@ -293,9 +290,8 @@ def show_notice_dialog(default_date=None):
         default_date = datetime.date.today()
     st.info(f"正在建立 **{default_date}** 的事項")
     
-    # 讓使用者可以在此彈窗修改日期 (因為按鈕開啟時預設是今天)
+    # 讓使用者可以在此彈窗修改日期
     edit_date = st.date_input("日期", default_date)
-    
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
     if st.button("發布公告", use_container_width=True):
@@ -333,28 +329,21 @@ def show_admin_dialog():
         c1, c2 = st.columns(2)
         start_date = c1.date_input("首堂課日期")
         weeks_count = c2.number_input("排課週數", min_value=1, value=12)
-        
         teachers_cfg = get_teachers_data()
         teacher_names = list(teachers_cfg.keys()) + ADMINS
         s_teacher = st.selectbox("授課師資", ["請選擇"] + list(set(teacher_names)))
-        
         c3, c4 = st.columns(2)
         t_start_str = c3.selectbox("開始時間", TIME_OPTIONS, index=18)
         t_end_str = c4.selectbox("結束時間", TIME_OPTIONS, index=24)
-        
         course_options = get_unique_course_names()
         s_course_name = st.selectbox("課程/班別", course_options + ["+ 新增班別..."])
         if s_course_name == "+ 新增班別...":
             s_course_name = st.text_input("輸入新班別名稱")
-            
         s_location = st.selectbox("教室", ["大教室", "小教室", "流放教室", "線上"])
-        
         if "preview_schedule" not in st.session_state:
             st.session_state['preview_schedule'] = None
-
         if st.button("🔍 檢查時段與假日", key="check_shift"):
-            if s_teacher == "請選擇":
-                st.error("請選擇師資")
+            if s_teacher == "請選擇": st.error("請選擇師資")
             else:
                 save_course_name(s_course_name)
                 preview = []
@@ -365,16 +354,13 @@ def show_admin_dialog():
                     for d in resp:
                         if d['isHoliday']: holidays[d['date']] = d['description']
                 except: pass
-
                 t_start = datetime.datetime.strptime(t_start_str, "%H:%M").time()
                 t_end = datetime.datetime.strptime(t_end_str, "%H:%M").time()
-                
                 for i in range(weeks_count):
                     current_date = start_date + datetime.timedelta(weeks=i)
                     d_str = current_date.strftime("%Y%m%d")
                     is_conflict = d_str in holidays
                     conflict_reason = holidays.get(d_str, "")
-                    
                     preview.append({
                         "date": current_date,
                         "start_dt": datetime.datetime.combine(current_date, t_start),
@@ -384,7 +370,6 @@ def show_admin_dialog():
                         "selected": not is_conflict
                     })
                 st.session_state['preview_schedule'] = preview
-
         if st.session_state['preview_schedule']:
             st.divider()
             st.write("請確認排課日期：")
@@ -394,7 +379,6 @@ def show_admin_dialog():
                 if item['conflict']: label += f" ⚠️ 撞期: {item['reason']}"
                 if st.checkbox(label, value=item['selected'], key=f"sch_{idx}"):
                     final_schedule.append(item)
-            
             if st.button(f"確認排入 {len(final_schedule)} 堂課", type="primary"):
                 count = 0
                 for item in final_schedule:
@@ -406,7 +390,6 @@ def show_admin_dialog():
 
     with tab2:
         st.subheader("👷 工讀生排班系統")
-        st.caption("請選擇工讀生與月份，然後勾選上班日期。")
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
@@ -416,14 +399,12 @@ def show_admin_dialog():
         c_t1, c_t2 = st.columns(2)
         pt_start = c_t1.selectbox("上班時間", TIME_OPTIONS, index=18, key="pt_start")
         pt_end = c_t2.selectbox("下班時間", TIME_OPTIONS, index=24, key="pt_end")
-        
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         cols = st.columns(7)
         weekdays = ["一", "二", "三", "四", "五", "六", "日"]
-        for idx, w in enumerate(weekdays):
-            cols[idx].write(f"**{w}**")
+        for idx, w in enumerate(weekdays): cols[idx].write(f"**{w}**")
         selected_dates = []
         first_day_weekday = datetime.date(pt_year, pt_month, 1).weekday()
         cols = st.columns(7)
@@ -434,14 +415,10 @@ def show_admin_dialog():
                 if st.checkbox(f"{day}", key=f"pt_day_{day}"):
                     selected_dates.append(curr_date)
             col_idx += 1
-            if col_idx > 6:
-                col_idx = 0
-                cols = st.columns(7)
-                
+            if col_idx > 6: col_idx = 0; cols = st.columns(7)
         st.divider()
         if st.button(f"確認排入 {len(selected_dates)} 個班次", type="primary", key="save_pt"):
-            if not selected_dates:
-                st.error("未勾選任何日期")
+            if not selected_dates: st.error("未勾選任何日期")
             else:
                 t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
                 t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
@@ -471,8 +448,7 @@ def show_admin_dialog():
                 d = doc.to_dict()
                 t_name = d.get("teacher", "未知")
                 if t_name in ADMINS or t_name == "未知": continue
-                if t_name not in report:
-                    report[t_name] = {"count": 0, "rate": teachers_cfg.get(t_name, {}).get("rate", 0)}
+                if t_name not in report: report[t_name] = {"count": 0, "rate": teachers_cfg.get(t_name, {}).get("rate", 0)}
                 report[t_name]["count"] += 1
             res = []
             total = 0
@@ -480,19 +456,14 @@ def show_admin_dialog():
                 sub = info["count"] * info["rate"]
                 total += sub
                 res.append({"姓名": name, "單價": info["rate"], "堂數": info["count"], "應發": sub})
-            if res:
-                st.dataframe(res, use_container_width=True)
-                st.metric("總計", f"${total:,}")
-            else:
-                st.info("無紀錄")
+            if res: st.dataframe(res, use_container_width=True); st.metric("總計", f"${total:,}")
+            else: st.info("無紀錄")
 
     with tab4:
         st.subheader("🎓 學生名單管理")
         col_op1, col_op2 = st.columns([1, 2])
         with col_op1:
-            if st.button("⬆️ 執行年度升級 (7月)", type="primary"):
-                show_promotion_confirm_dialog()
-        
+            if st.button("⬆️ 執行年度升級 (7月)", type="primary"): show_promotion_confirm_dialog()
         st.divider()
         st.subheader("👷 工讀生名單管理")
         current_pts = get_part_timers_list_cached()
@@ -508,7 +479,6 @@ def show_admin_dialog():
             new_list = [p for p in current_pts if p not in pts_to_del]
             save_part_timers_list(new_list)
             st.rerun()
-
         st.divider()
         st.subheader("👨‍🏫 師資薪資")
         with st.form("add_teacher"):
@@ -516,9 +486,7 @@ def show_admin_dialog():
             new_t_name = c_t1.text_input("老師姓名")
             new_t_rate = c_t2.number_input("單價", min_value=0, step=100)
             if st.form_submit_button("更新"):
-                if new_t_name:
-                    save_teacher_data(new_t_name, new_t_rate)
-                    st.rerun()
+                if new_t_name: save_teacher_data(new_t_name, new_t_rate); st.rerun()
         st.divider()
         uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入", type=['csv'])
         if uploaded_file is not None:
@@ -533,11 +501,8 @@ def show_admin_dialog():
                         merged_data = current_data + new_students
                         save_students_data(merged_data)
                         st.success(f"匯入 {len(new_students)} 筆")
-                else:
-                    st.error(f"CSV 需包含標題：{required_cols}")
-            except Exception as e:
-                st.error(f"讀取失敗: {e}")
-
+                else: st.error(f"CSV 需包含標題：{required_cols}")
+            except Exception as e: st.error(f"讀取失敗: {e}")
         with st.expander("手動新增學生"):
             with st.form("manual_student"):
                 ms_name = st.text_input("姓名 (必填)")
@@ -591,8 +556,7 @@ def show_admin_dialog():
                     batch_ids = [event_map[label] for label in selected_labels]
                     batch_delete_events(batch_ids)
                     st.rerun()
-        else:
-            st.info("目前資料庫是空的")
+        else: st.info("目前資料庫是空的")
 
 # --- 5. 主介面邏輯 ---
 
@@ -628,7 +592,6 @@ for i, area in enumerate(areas):
     days_diff = "N/A"
     delta_days = 999
     last_cleaner = "無紀錄"
-    
     if status:
         try:
             ts = status['timestamp']
@@ -639,12 +602,9 @@ for i, area in enumerate(areas):
             last_cleaner = status.get('staff', '未知')
         except: pass
     
-    if delta_days <= 3:
-        color_code = "green"
-    elif delta_days <= 6:
-        color_code = "orange"
-    else:
-        color_code = "red"
+    if delta_days <= 3: color_code = "green"
+    elif delta_days <= 6: color_code = "orange"
+    else: color_code = "red"
 
     with clean_cols[i]:
         st.caption(area)
@@ -654,73 +614,66 @@ for i, area in enumerate(areas):
             if st.session_state['user']:
                 log_cleaning(area, st.session_state['user'])
                 st.rerun()
-            else:
-                st.error("請先登入")
+            else: st.error("請先登入")
 
 st.divider()
 
 if st.session_state['user']:
-    # ★ 恢復：新增公告/交接按鈕 (解決手機列表模式無法點擊的問題)
+    # ★ 按鈕保留：手機 List View 唯一救贖
     c_act1, c_act2 = st.columns([1, 4])
     with c_act1:
         if st.button("➕ 新增公告/交接", type="primary", use_container_width=True):
-            show_notice_dialog() # 預設今天
-    
+            show_notice_dialog() 
     if st.session_state['is_admin']:
         if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
 
-# 行事曆
-all_events = get_all_events_cached()
-calendar_options = {
-    "editable": True, 
-    "headerToolbar": {
-        "left": "today prev,next",
-        "center": "title",
-        "right": "listMonth,dayGridMonth"
-    },
-    "initialView": "listMonth",
-    "height": "650px",
-    "locale": "zh-tw",
-    "titleFormat": {"year": "numeric", "month": "long"},
-    "slotLabelFormat": {
-        "hour": "2-digit",
-        "minute": "2-digit",
-        "hour12": False
-    },
-    "eventTimeFormat": {
-        "hour": "2-digit",
-        "minute": "2-digit",
-        "hour12": False
-    },
-    "views": {
-        "dayGridMonth": {"displayEventTime": False}, 
-        "listMonth": {"displayEventTime": True}
-    },
-    "selectable": False,
-    "scrollTime": datetime.datetime.now().strftime("%H:%M:%S")
-}
+# --- ★ 關鍵：使用 @st.fragment 封裝行事曆 ---
+@st.fragment
+def calendar_component():
+    all_events = get_all_events_cached()
+    calendar_options = {
+        "editable": True, 
+        "headerToolbar": {
+            "left": "today prev,next",
+            "center": "title",
+            "right": "listMonth,dayGridMonth"
+        },
+        "initialView": "listMonth",
+        "height": "650px",
+        "locale": "zh-tw",
+        "titleFormat": {"year": "numeric", "month": "long"},
+        "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
+        "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
+        "views": {
+            "dayGridMonth": {"displayEventTime": False}, 
+            "listMonth": {"displayEventTime": True}
+        },
+        "selectable": False,
+        "scrollTime": datetime.datetime.now().strftime("%H:%M:%S")
+    }
 
-cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
+    cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-# 日期解析修復 (Month View 專用)
-if cal_return.get("dateClick"):
-    clicked_date_str = cal_return["dateClick"]["date"]
-    clean_date_str = clicked_date_str[:10]
-    
-    try:
-        date_obj = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
+    if cal_return.get("dateClick"):
+        clicked_date_str = cal_return["dateClick"]["date"]
+        clean_date_str = clicked_date_str[:10]
+        try:
+            date_obj = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
+            if st.session_state['user']:
+                show_notice_dialog(default_date=date_obj)
+            else:
+                st.toast("請先登入才能新增事項", icon="🔒")
+        except ValueError:
+            st.error(f"日期解析錯誤：{clicked_date_str}")
+
+    if cal_return.get("eventClick"):
+        event_id = cal_return["eventClick"]["event"]["id"]
+        props = cal_return["eventClick"]["event"]["extendedProps"]
         if st.session_state['user']:
-            show_notice_dialog(default_date=date_obj)
-        else:
-            st.toast("請先登入才能新增事項", icon="🔒")
-    except ValueError:
-        st.error(f"日期解析錯誤：{clicked_date_str}")
+            show_edit_event_dialog(event_id, props)
 
-if cal_return.get("eventClick"):
-    event_id = cal_return["eventClick"]["event"]["id"]
-    props = cal_return["eventClick"]["event"]["extendedProps"]
-    if st.session_state['user']:
-        show_edit_event_dialog(event_id, props)
+# 呼叫行事曆 Fragment
+calendar_component()
 
 
 # --- 6. 智慧點名系統 ---
@@ -728,18 +681,16 @@ st.divider()
 st.subheader("📋 每日點名")
 
 selected_date = datetime.date.today()
-if cal_return and "dateClick" in cal_return:
-    clicked_date_str = cal_return["dateClick"]["date"]
-    clean_date_str = clicked_date_str[:10]
-    try:
-        selected_date = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
-    except: pass
-
+# 為了避免 Fragment 內部的 state 無法傳遞出來，我們這裡維持預設為今日
+# 或者是使用 Session State 來溝通（稍微複雜），目前先維持預設今日最穩定
 st.info(f"日期：**{selected_date}**")
 
 daily_courses = []
 s_date_str = selected_date.isoformat()
-for e in all_events:
+# 注意：這裡要重新讀取一次事件，因為上面的 all_events 是在 Fragment 裡
+all_events_main = get_all_events_cached()
+
+for e in all_events_main:
     if e.get('start', '').startswith(s_date_str) and 'extendedProps' in e:
         props = e['extendedProps']
         if props.get('type') == 'shift':
