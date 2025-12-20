@@ -116,15 +116,16 @@ def get_all_events_cached():
             color = "#3788d8"
             
             if data.get("type") == "shift":
+                # loc = data.get("location", "未知") # 為了手機版面整潔，隱藏教室
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
-                # 課程 (老師)
+                # ★ 修改：只顯示 課程 (老師)，去掉教室
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
                 
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
-                title_text = f"{staff_name}"
+                title_text = f"{staff_name}" # 只顯示名字
                 color = "#6f42c1"
                 
             elif data.get("type") == "notice":
@@ -292,11 +293,8 @@ def show_notice_dialog(default_date=None):
     if default_date is None:
         default_date = datetime.date.today()
     st.info(f"正在建立 **{default_date}** 的事項")
-    
-    # ★ 這裡就是你要的分類選單
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
-    
     if st.button("發布公告", use_container_width=True):
         start_dt = datetime.datetime.combine(default_date, datetime.time(9,0))
         end_dt = datetime.datetime.combine(default_date, datetime.time(10,0))
@@ -462,12 +460,12 @@ def show_admin_dialog():
             end_date = start_date + relativedelta(months=1)
             start_str = start_date.isoformat()
             end_str = end_date.isoformat()
-            docs = db.collection("shifts").where("start", ">=", start_str).where("start", "<", end_str).stream()
+            docs = db.collection("shifts").where("type", "==", "shift")\
+                     .where("start", ">=", start_str).where("start", "<", end_str).stream()
             teachers_cfg = get_teachers_data()
             report = {}
             for doc in docs:
                 d = doc.to_dict()
-                if d.get("type") != "shift": continue
                 t_name = d.get("teacher", "未知")
                 if t_name in ADMINS or t_name == "未知": continue
                 if t_name not in report:
@@ -509,21 +507,15 @@ def show_admin_dialog():
             st.rerun()
 
         st.divider()
-        st.subheader("👨‍🏫 師資名單管理")
-        current_teachers = list(get_teachers_data().keys())
-        c_t1, c_t2, c_t3 = st.columns([2, 1, 1])
-        new_t_name = c_t1.text_input("老師姓名")
-        new_t_rate = c_t2.number_input("單價", min_value=0, step=100)
-        if c_t3.button("新增/更新老師"):
-            if new_t_name:
-                save_teacher_data(new_t_name, new_t_rate)
-                st.rerun()
-        t_to_del = st.multiselect("選擇要移除的老師", current_teachers)
-        if t_to_del and st.button("確認移除選取老師"):
-            for t in t_to_del:
-                db.collection("teachers_config").document(t).delete()
-            st.rerun()
-
+        st.subheader("👨‍🏫 師資薪資")
+        with st.form("add_teacher"):
+            c_t1, c_t2 = st.columns([2, 1])
+            new_t_name = c_t1.text_input("老師姓名")
+            new_t_rate = c_t2.number_input("單價", min_value=0, step=100)
+            if st.form_submit_button("更新"):
+                if new_t_name:
+                    save_teacher_data(new_t_name, new_t_rate)
+                    st.rerun()
         st.divider()
         uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入", type=['csv'])
         if uploaded_file is not None:
@@ -677,11 +669,13 @@ calendar_options = {
         "center": "title",
         "right": "listMonth,dayGridMonth"
     },
-    # ★ 關鍵：預設為 Month View
-    "initialView": "dayGridMonth",
+    "initialView": "listMonth",
     "height": "650px",
     "locale": "zh-tw",
-    "titleFormat": {"year": "2-digit", "month": "numeric"},
+    # ★ 標題設定：Numeric Year + Long Month = "2025年12月"
+    "titleFormat": {"year": "numeric", "month": "long"},
+    
+    # ★ 24小時制設定
     "slotLabelFormat": {
         "hour": "2-digit",
         "minute": "2-digit",
@@ -692,26 +686,33 @@ calendar_options = {
         "minute": "2-digit",
         "hour12": False
     },
+    
+    # ★ View 特定設定
     "views": {
-        "dayGridMonth": {"displayEventTime": False},
-        "listMonth": {"displayEventTime": True}
+        "dayGridMonth": {"displayEventTime": False}, # 月曆不顯示時間
+        "listMonth": {"displayEventTime": True}       # 列表顯示時間
     },
-    # ★ 關鍵：關閉 navLinks，防止誤觸跳轉，並啟用 selectable 讓整格可點
-    "navLinks": False,
-    "selectable": True,
+    
+    # ★ 強制 Scroll 到當前時間 (對 List View 有效)
     "scrollTime": datetime.datetime.now().strftime("%H:%M:%S")
 }
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-# ★ 點擊日期 -> 彈出新增視窗
+# ★ 修復：強化日期解析，防止 Z 結尾崩潰
 if cal_return.get("dateClick"):
-    clicked_date_str = cal_return["dateClick"]["date"].split("T")[0]
-    date_obj = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
-    if st.session_state['user']:
-        show_notice_dialog(default_date=date_obj)
-    else:
-        st.toast("請先登入才能新增事項", icon="🔒")
+    clicked_date_str = cal_return["dateClick"]["date"]
+    # 移除可能存在的 Z，並只取 T 之前的日期部分
+    clean_date_str = clicked_date_str.replace("Z", "").split("T")[0]
+    
+    try:
+        date_obj = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
+        if st.session_state['user']:
+            show_notice_dialog(default_date=date_obj)
+        else:
+            st.toast("請先登入才能新增事項", icon="🔒")
+    except ValueError:
+        st.error(f"日期解析錯誤：{clicked_date_str}")
 
 if cal_return.get("eventClick"):
     event_id = cal_return["eventClick"]["event"]["id"]
@@ -725,9 +726,14 @@ st.divider()
 st.subheader("📋 每日點名")
 
 selected_date = datetime.date.today()
+# 優先使用點擊的日期，否則使用今日
 if cal_return and "dateClick" in cal_return:
-    clicked_date_str = cal_return["dateClick"]["date"].split("T")[0]
-    selected_date = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
+    # 同樣應用修復邏輯
+    clicked_date_str = cal_return["dateClick"]["date"]
+    clean_date_str = clicked_date_str.replace("Z", "").split("T")[0]
+    try:
+        selected_date = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
+    except: pass
 
 st.info(f"日期：**{selected_date}**")
 
@@ -737,6 +743,7 @@ for e in all_events:
     if e.get('start', '').startswith(s_date_str) and 'extendedProps' in e:
         props = e['extendedProps']
         if props.get('type') == 'shift':
+            # 這裡我們讀取 raw title (班級名)
             daily_courses.append(props.get('title', ''))
 
 all_students = get_students_data_cached()
