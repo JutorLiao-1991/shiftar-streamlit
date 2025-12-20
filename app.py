@@ -34,7 +34,6 @@ db = firestore.client()
 
 # --- 2. 常數與設定 ---
 ADMINS = ["鳩特", "鳩婆"]
-# ★ 鎖定登入名單
 LOGIN_LIST = ["鳩特", "鳩婆", "世軒", "竣揚", "暐傑"]
 STAFF_PASSWORD = "88888888"
 ADMIN_PASSWORD = "150508"
@@ -154,6 +153,16 @@ def delete_event_from_db(doc_id):
     get_all_events_cached.clear()
     st.toast("刪除成功！")
 
+# 批次刪除功能
+def batch_delete_events(doc_ids):
+    batch = db.batch()
+    for doc_id in doc_ids:
+        doc_ref = db.collection("shifts").document(doc_id)
+        batch.delete(doc_ref)
+    batch.commit()
+    get_all_events_cached.clear()
+    st.toast(f"成功刪除 {len(doc_ids)} 筆資料！")
+
 def get_cleaning_status(area_name):
     doc = db.collection("latest_cleaning_status").document(area_name).get()
     return doc.to_dict() if doc.exists else None
@@ -168,7 +177,6 @@ def log_cleaning(area, user):
 
 @st.dialog("👤 人員登入")
 def show_login_dialog():
-    # ★ 鎖定名單，不再讀取資料庫
     user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
     password = st.text_input("請輸入密碼", type="password")
     
@@ -237,14 +245,12 @@ def show_edit_event_dialog(event_id, props):
             delete_event_from_db(event_id)
             st.rerun()
 
-# ★ 點擊日期後觸發的視窗
 @st.dialog("📢 新增公告 / 交接")
 def show_notice_dialog(default_date=None):
     if default_date is None:
         default_date = datetime.date.today()
         
     st.info(f"正在建立 **{default_date}** 的事項")
-    # 不再讓使用者選日期，鎖定為點擊的日期
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
     
@@ -441,8 +447,8 @@ def show_admin_dialog():
                 st.rerun()
 
     with tab4:
-        st.subheader("🗑️ 資料庫強制管理")
-        st.caption("這裡列出資料庫中所有的行程與公告，若行事曆上刪不掉，請在此刪除。")
+        st.subheader("🗑️ 資料庫強制管理 (批次刪除)")
+        st.caption("請小心使用，刪除後無法復原。")
         
         all_docs = db.collection("shifts").order_by("start", direction=firestore.Query.DESCENDING).stream()
         data_list = []
@@ -452,14 +458,25 @@ def show_admin_dialog():
             data_list.append(d)
         
         if data_list:
+            # 製作選單標籤：日期 | 標題 (建立者)
+            # 使用 dict 來存 map: label -> doc_id
+            event_map = {}
             for item in data_list:
-                with st.expander(f"{item.get('start')[:10]} - {item.get('title')}"):
-                    c1, c2 = st.columns([3, 1])
-                    c1.write(f"時間: {item.get('start')} ~ {item.get('end')}")
-                    c1.write(f"建立者: {item.get('staff')}")
-                    if c2.button("🗑️ 永久刪除", key=f"del_list_{item['id']}"):
-                        delete_event_from_db(item['id'])
-                        st.rerun()
+                label = f"{item.get('start')[:10]} | {item.get('title')} ({item.get('staff')})"
+                event_map[label] = item['id']
+            
+            # 多選選單
+            selected_labels = st.multiselect(
+                "請選擇要刪除的項目 (可搜尋關鍵字、可多選)",
+                options=list(event_map.keys())
+            )
+            
+            if selected_labels:
+                st.warning(f"⚠️ 您即將刪除 {len(selected_labels)} 筆資料，確定嗎？")
+                if st.button("🗑️ 確認批次刪除", type="primary"):
+                    batch_ids = [event_map[label] for label in selected_labels]
+                    batch_delete_events(batch_ids)
+                    st.rerun()
         else:
             st.info("目前資料庫是空的")
 
@@ -546,26 +563,23 @@ calendar_options = {
     },
     "initialView": "listMonth",
     "height": "650px",
-    # ★ 空間優化：使用 zh-tw 與簡短格式 25年12月
     "locale": "zh-tw",
-    "titleFormat": {"year": "2-digit", "month": "numeric"}
+    # ★ 關鍵修正：改為 numeric + long，顯示為「2025年12月」
+    "titleFormat": {"year": "numeric", "month": "long"}
 }
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
 # 處理點擊事件
 if cal_return.get("dateClick"):
-    # ★ 點擊空白日期 -> 開啟新增公告
     clicked_date_str = cal_return["dateClick"]["date"].split("T")[0]
     date_obj = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
-    # 使用者已登入才允許
     if st.session_state['user']:
         show_notice_dialog(default_date=date_obj)
     else:
         st.toast("請先登入才能新增事項", icon="🔒")
 
 if cal_return.get("eventClick"):
-    # ★ 點擊既有行程 -> 開啟編輯/刪除
     event_id = cal_return["eventClick"]["event"]["id"]
     props = cal_return["eventClick"]["event"]["extendedProps"]
     if st.session_state['user']:
@@ -577,7 +591,6 @@ st.divider()
 st.subheader("📋 每日點名")
 
 selected_date = datetime.date.today()
-# 優先使用點擊的日期，否則使用今日
 if cal_return and "dateClick" in cal_return:
     clicked_date_str = cal_return["dateClick"]["date"].split("T")[0]
     selected_date = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
