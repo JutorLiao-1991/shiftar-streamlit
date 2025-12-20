@@ -8,7 +8,7 @@ import requests
 import json
 import pytz
 import pandas as pd
-import uuid # 用來產生唯一 ID
+import uuid
 
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
@@ -34,6 +34,8 @@ db = firestore.client()
 
 # --- 2. 常數與設定 ---
 ADMINS = ["鳩特", "鳩婆"]
+# ★ 鎖定登入名單
+LOGIN_LIST = ["鳩特", "鳩婆", "世軒", "竣揚", "暐傑"]
 STAFF_PASSWORD = "88888888"
 ADMIN_PASSWORD = "150508"
 
@@ -100,7 +102,6 @@ def get_all_events_cached():
                 elif category == "活動": color = "#0d6efd"
                 else: color = "#ffc107"
             
-            # 淨化資料 (datetime -> str)
             sanitized_props = {}
             for k, v in data.items():
                 if isinstance(v, (datetime.datetime, datetime.date)):
@@ -119,18 +120,17 @@ def get_all_events_cached():
             })
     except: pass
     
-    # 國定假日 (給予 ID 以防報錯)
     try:
         year = datetime.date.today().year
         resp = requests.get(f"https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json").json()
         for day in resp:
             if day.get('isHoliday'):
                 events.append({
-                    "id": f"holiday_{day['date']}", # ★ 給假日一個假 ID
+                    "id": f"holiday_{day['date']}",
                     "title": f"🌴 {day['description']}", "start": day['date'], 
                     "allDay": True, "display": "background", "backgroundColor": "#ffebee",
                     "editable": False,
-                    "extendedProps": {"type": "holiday"} # 標記為假日
+                    "extendedProps": {"type": "holiday"}
                 })
     except: pass
     return events
@@ -168,12 +168,8 @@ def log_cleaning(area, user):
 
 @st.dialog("👤 人員登入")
 def show_login_dialog():
-    teachers_cfg = get_teachers_data()
-    staff_list = list(teachers_cfg.keys())
-    DEFAULT_STAFFS = ["世軒", "竣揚", "暐傑"]
-    all_users = list(set(ADMINS + DEFAULT_STAFFS + staff_list))
-    
-    user = st.selectbox("請選擇您的身份", ["請選擇"] + all_users)
+    # ★ 鎖定名單，不再讀取資料庫
+    user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
     password = st.text_input("請輸入密碼", type="password")
     
     if st.button("登入", use_container_width=True):
@@ -201,10 +197,8 @@ def show_login_dialog():
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
-    # 檢查是否為假日
     if props.get('type') == 'holiday':
-        st.warning("🌴 這是國定假日，無法編輯或刪除。")
-        st.caption("這是系統自動匯入的參考資訊。")
+        st.warning("🌴 這是國定假日，無法編輯。")
         if st.button("關閉"): st.rerun()
         return
 
@@ -238,22 +232,25 @@ def show_edit_event_dialog(event_id, props):
             delete_event_from_db(event_id)
             st.rerun()
     else:
-        # 處理未分類或舊資料
         st.warning("此為舊格式資料或未知類型")
         if st.button("🗑️ 強制刪除", type="secondary"):
             delete_event_from_db(event_id)
             st.rerun()
 
-
+# ★ 點擊日期後觸發的視窗
 @st.dialog("📢 新增公告 / 交接")
-def show_notice_dialog():
-    notice_date = st.date_input("日期", datetime.date.today())
+def show_notice_dialog(default_date=None):
+    if default_date is None:
+        default_date = datetime.date.today()
+        
+    st.info(f"正在建立 **{default_date}** 的事項")
+    # 不再讓使用者選日期，鎖定為點擊的日期
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
     
     if st.button("發布公告", use_container_width=True):
-        start_dt = datetime.datetime.combine(notice_date, datetime.time(9,0))
-        end_dt = datetime.datetime.combine(notice_date, datetime.time(10,0))
+        start_dt = datetime.datetime.combine(default_date, datetime.time(9,0))
+        end_dt = datetime.datetime.combine(default_date, datetime.time(10,0))
         add_event_to_db(notice_content, start_dt, end_dt, "notice", st.session_state['user'], category=category)
         st.toast("公告已發布")
         st.rerun()
@@ -345,14 +342,12 @@ def show_admin_dialog():
         q_year = col_m1.number_input("年份", value=datetime.date.today().year)
         q_month = col_m2.number_input("月份", value=datetime.date.today().month, min_value=1, max_value=12)
         
-        # 薪資計算
         if st.button("計算本月薪資"):
             start_date = datetime.datetime(q_year, q_month, 1)
             end_date = start_date + relativedelta(months=1)
             start_str = start_date.isoformat()
             end_str = end_date.isoformat()
             
-            # 直接從資料庫抓，不依賴快取以免不準
             docs = db.collection("shifts").where("type", "==", "shift")\
                      .where("start", ">=", start_str).where("start", "<", end_str).stream()
             
@@ -445,12 +440,10 @@ def show_admin_dialog():
                 save_students_data(new_list)
                 st.rerun()
 
-    # ★ TAB 4: 強力資料管理 (解決刪不掉的問題)
     with tab4:
         st.subheader("🗑️ 資料庫強制管理")
         st.caption("這裡列出資料庫中所有的行程與公告，若行事曆上刪不掉，請在此刪除。")
         
-        # 讀取所有事件 (不快取，確保最新)
         all_docs = db.collection("shifts").order_by("start", direction=firestore.Query.DESCENDING).stream()
         data_list = []
         for doc in all_docs:
@@ -469,7 +462,6 @@ def show_admin_dialog():
                         st.rerun()
         else:
             st.info("目前資料庫是空的")
-
 
 # --- 5. 主介面邏輯 ---
 
@@ -495,13 +487,17 @@ with col_login:
 
 st.divider()
 
-st.subheader("🧹 環境整潔")
+# --- 改良版環境整潔 ---
+st.subheader("🧹 環境整潔監控")
 clean_cols = st.columns(4)
 areas = ["櫃檯茶水間", "大教室", "小教室", "流放教室"]
+
 for i, area in enumerate(areas):
     status = get_cleaning_status(area)
     days_diff = "N/A"
     delta_days = 999
+    last_cleaner = "無紀錄"
+    
     if status:
         try:
             ts = status['timestamp']
@@ -509,12 +505,24 @@ for i, area in enumerate(areas):
             if ts.tzinfo: ts = ts.replace(tzinfo=None)
             delta_days = (datetime.datetime.now() - ts).days
             days_diff = f"{delta_days} 天"
+            last_cleaner = status.get('staff', '未知')
         except: pass
+    
+    # 邏輯修正：1-3綠，4-6黃，>6紅
+    if delta_days <= 3:
+        color_code = "green"
+    elif delta_days <= 6:
+        color_code = "orange"
+    else:
+        color_code = "red"
+
     with clean_cols[i]:
         st.caption(area)
-        color = "green" if delta_days <= 3 else "orange" if delta_days <= 7 else "red"
-        st.markdown(f"### :{color}[{days_diff}]")
-        if st.button("登記", key=f"clean_{i}", use_container_width=True):
+        st.markdown(f"### :{color_code}[{days_diff}]")
+        st.caption(f"最後打掃：{last_cleaner}") # 直接顯示人名
+        
+        # 登記按鈕
+        if st.button("已清潔", key=f"clean_{i}", use_container_width=True):
             if st.session_state['user']:
                 log_cleaning(area, st.session_state['user'])
                 st.rerun()
@@ -524,12 +532,8 @@ for i, area in enumerate(areas):
 st.divider()
 
 if st.session_state['user']:
-    btn_c1, btn_c2 = st.columns(2)
-    with btn_c1:
-        if st.button("📝 公告/交接", use_container_width=True): show_notice_dialog()
-    with btn_c2:
-        if st.session_state['is_admin']:
-            if st.button("⚙️ 管理員後台", type="primary", use_container_width=True): show_admin_dialog()
+    if st.session_state['is_admin']:
+        if st.button("⚙️ 管理員後台", type="primary", use_container_width=True): show_admin_dialog()
 
 # 行事曆
 all_events = get_all_events_cached()
@@ -541,29 +545,45 @@ calendar_options = {
         "right": "listMonth,dayGridMonth"
     },
     "initialView": "listMonth",
-    "height": "650px", 
+    "height": "650px",
+    # ★ 空間優化：使用 zh-tw 與簡短格式 25年12月
+    "locale": "zh-tw",
+    "titleFormat": {"year": "2-digit", "month": "numeric"}
 }
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
+# 處理點擊事件
+if cal_return.get("dateClick"):
+    # ★ 點擊空白日期 -> 開啟新增公告
+    clicked_date_str = cal_return["dateClick"]["date"].split("T")[0]
+    date_obj = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
+    # 使用者已登入才允許
+    if st.session_state['user']:
+        show_notice_dialog(default_date=date_obj)
+    else:
+        st.toast("請先登入才能新增事項", icon="🔒")
+
 if cal_return.get("eventClick"):
+    # ★ 點擊既有行程 -> 開啟編輯/刪除
     event_id = cal_return["eventClick"]["event"]["id"]
     props = cal_return["eventClick"]["event"]["extendedProps"]
-    show_edit_event_dialog(event_id, props)
+    if st.session_state['user']:
+        show_edit_event_dialog(event_id, props)
 
 
-# --- 6. 智慧點名系統 (格狀按鈕優化) ---
+# --- 6. 智慧點名系統 ---
 st.divider()
 st.subheader("📋 每日點名")
 
 selected_date = datetime.date.today()
+# 優先使用點擊的日期，否則使用今日
 if cal_return and "dateClick" in cal_return:
     clicked_date_str = cal_return["dateClick"]["date"].split("T")[0]
     selected_date = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
 
 st.info(f"日期：**{selected_date}**")
 
-# 1. 找出當日課程
 daily_courses = []
 s_date_str = selected_date.isoformat()
 for e in all_events:
@@ -572,7 +592,6 @@ for e in all_events:
         if props.get('type') == 'shift':
             daily_courses.append(props.get('title', ''))
 
-# 2. 篩選學生
 all_students = get_students_data_cached()
 target_students = []
 if daily_courses:
@@ -584,7 +603,6 @@ else:
     st.write("📅 今日無排課紀錄")
 
 date_key = str(selected_date)
-# 初始化邏輯：當鍵不存在，或「今日有課」且「未到名單為空」（防止資料卡住）時重置
 if date_key not in st.session_state or (daily_courses and not st.session_state[date_key]['absent'] and not st.session_state[date_key]['present']):
     if date_key not in st.session_state:
         st.session_state[date_key] = {
