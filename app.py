@@ -32,16 +32,15 @@ db = firestore.client()
 
 # --- 2. 身份與常數定義 ---
 ADMINS = ["鳩特", "鳩婆"]
-# 時間選單
 TIME_SLOTS = []
 for h in range(9, 22):
     TIME_SLOTS.append(datetime.time(h, 0))
     TIME_SLOTS.append(datetime.time(h, 30))
 TIME_SLOTS.append(datetime.time(22, 0))
 
-# --- 3. 資料庫存取 (導入快取 @st.cache_data 以加速) ---
+# --- 3. 資料庫存取 (快取加速層) ---
 
-# A. 取得/更新 老師設定
+# A. 老師與薪資
 def get_teachers_data():
     docs = db.collection("teachers_config").stream()
     teachers = {}
@@ -53,8 +52,8 @@ def save_teacher_data(name, rate):
     db.collection("teachers_config").document(name).set({"rate": rate})
     st.toast(f"已更新 {name} 的薪資設定")
 
-# B. 取得/更新 學生名單 (快取)
-@st.cache_data(ttl=300) # 5分鐘快取，或手動清除
+# B. 學生名單 (快取 5 分鐘)
+@st.cache_data(ttl=300)
 def get_students_list_cached():
     doc = db.collection("settings").document("students").get()
     if doc.exists:
@@ -63,7 +62,7 @@ def get_students_list_cached():
 
 def save_students_list(new_list):
     db.collection("settings").document("students").set({"list": new_list})
-    get_students_list_cached.clear() # 清除快取，下次讀取才會是新的
+    get_students_list_cached.clear() # 清除快取
     st.toast("學生名單已更新")
 
 # C. 環境清潔
@@ -77,12 +76,11 @@ def log_cleaning(area, user):
     db.collection("latest_cleaning_status").document(area).set({"area": area, "staff": user, "timestamp": now})
     st.toast(f"✨ {area} 清潔完成！", icon="🧹")
 
-# D. 班表與事件 (重頭戲：快取加速)
-@st.cache_data(ttl=600) # 班表緩存 10 分鐘，操作順暢度提升關鍵
+# D. 班表事件 (快取 10 分鐘)
+@st.cache_data(ttl=600)
 def get_all_events_cached():
     events = []
     try:
-        # 抓取資料庫
         docs = db.collection("shifts").stream()
         for doc in docs:
             data = doc.to_dict()
@@ -101,7 +99,7 @@ def get_all_events_cached():
             })
     except: pass
     
-    # 抓取國定假日 (API 也快取，不用每次都問)
+    # 國定假日
     try:
         year = datetime.date.today().year
         resp = requests.get(f"https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json").json()
@@ -114,7 +112,6 @@ def get_all_events_cached():
     except: pass
     return events
 
-# 寫入資料庫時，記得清除快取，這樣畫面才會更新
 def add_event_to_db(title, start, end, type, user, location="", teacher_name=""):
     db.collection("shifts").add({
         "title": title, "start": start.isoformat(), "end": end.isoformat(),
@@ -122,7 +119,7 @@ def add_event_to_db(title, start, end, type, user, location="", teacher_name="")
         "teacher": teacher_name, 
         "created_at": datetime.datetime.now()
     })
-    get_all_events_cached.clear() # ★ 重要：清除快取
+    get_all_events_cached.clear() # 清除快取，強制更新
 
 # E. 薪資計算
 def calculate_salary(year, month):
@@ -154,7 +151,6 @@ def calculate_salary(year, month):
     return results, total_payout
 
 # --- 4. 彈出視窗 UI ---
-
 @st.dialog("👤 人員登入")
 def show_login_dialog():
     teachers_cfg = get_teachers_data()
@@ -285,7 +281,6 @@ with col_login:
 
 st.divider()
 
-# 環境整潔 (維持原樣)
 st.subheader("🧹 環境整潔")
 clean_cols = st.columns(4)
 areas = ["櫃檯茶水間", "大教室", "小教室", "流放教室"]
@@ -319,21 +314,20 @@ if st.session_state['user']:
             if st.button("⚙️ 後台管理", type="primary", use_container_width=True): show_admin_dialog()
 
 # 行事曆 (優化版)
-all_events = get_all_events_cached() # 使用快取資料！
+all_events = get_all_events_cached()
 calendar_options = {
     "editable": False,
     "headerToolbar": {
         "left": "today prev,next",
         "center": "title",
-        # 關鍵修改：預設提供 listMonth (條列) 和 dayGridMonth (月曆) 兩種視圖
-        "right": "listMonth,dayGridMonth" 
+        "right": "listMonth,dayGridMonth" # 預設提供兩種
     },
-    "initialView": "listMonth", # 預設為手機友善的「條列式」
-    "height": "auto",
+    "initialView": "listMonth", # 預設為條列式 (手機不擁擠)
+    "height": "650px", # ★ 強制高度，解決被腰斬的問題
 }
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick'])
 
-# --- 6. 點名系統 (快取優化版) ---
+# --- 6. 點名系統 (極速版) ---
 st.divider()
 st.subheader("📋 每日點名")
 
@@ -342,7 +336,7 @@ if cal_return and "dateClick" in cal_return:
     clicked_date_str = cal_return["dateClick"]["date"].split("T")[0]
     selected_date = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
 
-st.info(f"日期：**{selected_date}** (請記得按儲存)")
+st.info(f"日期：**{selected_date}**")
 
 date_key = str(selected_date)
 # 確保初始化
@@ -351,7 +345,7 @@ if date_key not in st.session_state:
         "absent": get_students_list_cached(),
         "present": [],
         "leave": [],
-        "dirty": False # 標記是否有更動未存檔
+        "dirty": False
     }
 
 current_data = st.session_state[date_key]
@@ -360,14 +354,14 @@ if st.session_state['user']:
     with st.expander("點名表單", expanded=True):
         col_absent, col_present, col_leave = st.columns(3)
         
-        # 顯示按鈕 (這裡的操作因為不讀資料庫，會變很快)
+        # 顯示按鈕 (純快取操作，速度極快)
         with col_absent:
             st.markdown("### 🔴 未到")
             for student in current_data['absent']:
                 if st.button(f"👤 {student}", key=f"abs_{student}_{date_key}", use_container_width=True):
                     current_data['absent'].remove(student)
                     current_data['present'].append(student)
-                    current_data['dirty'] = True # 標記髒資料
+                    current_data['dirty'] = True
                     st.rerun()
         with col_present:
             st.markdown("### 🟢 已到")
@@ -392,14 +386,12 @@ if st.session_state['user']:
                     current_data['dirty'] = True
                     st.rerun()
 
-    # 儲存按鈕 (只有更動時才變紅色提醒)
+    # 儲存按鈕 (狀態更動後變紅)
     btn_type = "primary" if current_data.get('dirty', False) else "secondary"
-    btn_text = "💾 儲存變更 (未儲存)" if current_data.get('dirty', False) else "💾 資料已儲存"
+    btn_text = "💾 儲存 (有更動)" if current_data.get('dirty', False) else "💾 資料已儲存"
     
     if st.button(btn_text, type=btn_type, use_container_width=True):
-        # 這裡寫入資料庫
-        # db.collection("attendance").add(...) 
-        # 目前先模擬
+        # 這裡未來可接 add_rollcall_to_db(...)
         current_data['dirty'] = False
         st.success(f"已儲存：出席 {len(current_data['present'])} 人，請假 {len(current_data['leave'])} 人")
         st.rerun()
