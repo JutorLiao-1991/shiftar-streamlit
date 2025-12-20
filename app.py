@@ -8,6 +8,7 @@ import requests
 import json
 import pytz
 import pandas as pd
+import uuid # 用來產生唯一 ID
 
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
@@ -79,7 +80,6 @@ def save_students_data(new_data_list):
     get_students_data_cached.clear()
     st.toast("學生名單已更新")
 
-# ★ 關鍵修正：這裡加入了 sanitize 機制，解決報錯
 @st.cache_data(ttl=600)
 def get_all_events_cached():
     events = []
@@ -100,15 +100,13 @@ def get_all_events_cached():
                 elif category == "活動": color = "#0d6efd"
                 else: color = "#ffc107"
             
-            # --- 修正開始：將 datetime 物件轉為字串 ---
+            # 淨化資料 (datetime -> str)
             sanitized_props = {}
             for k, v in data.items():
-                # 如果值是 datetime 或 date 類型，轉成字串
                 if isinstance(v, (datetime.datetime, datetime.date)):
                     sanitized_props[k] = str(v)
                 else:
                     sanitized_props[k] = v
-            # --- 修正結束 ---
 
             events.append({
                 "id": doc.id,
@@ -117,19 +115,22 @@ def get_all_events_cached():
                 "end": data.get("end"),
                 "color": color, 
                 "allDay": data.get("type") == "notice",
-                "extendedProps": sanitized_props # 使用淨化後的資料
+                "extendedProps": sanitized_props
             })
     except: pass
     
+    # 國定假日 (給予 ID 以防報錯)
     try:
         year = datetime.date.today().year
         resp = requests.get(f"https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json").json()
         for day in resp:
             if day.get('isHoliday'):
                 events.append({
+                    "id": f"holiday_{day['date']}", # ★ 給假日一個假 ID
                     "title": f"🌴 {day['description']}", "start": day['date'], 
                     "allDay": True, "display": "background", "backgroundColor": "#ffebee",
-                    "editable": False
+                    "editable": False,
+                    "extendedProps": {"type": "holiday"} # 標記為假日
                 })
     except: pass
     return events
@@ -200,6 +201,13 @@ def show_login_dialog():
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
+    # 檢查是否為假日
+    if props.get('type') == 'holiday':
+        st.warning("🌴 這是國定假日，無法編輯或刪除。")
+        st.caption("這是系統自動匯入的參考資訊。")
+        if st.button("關閉"): st.rerun()
+        return
+
     st.write(f"正在編輯：**{props.get('title', '')}**")
     
     if props.get('type') == 'shift':
@@ -220,7 +228,6 @@ def show_edit_event_dialog(event_id, props):
         idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 3
         
         new_cat = st.selectbox("分類", cat_opts, index=idx)
-        # title 存內容
         new_content = st.text_area("內容", props.get('title')) 
         
         col1, col2 = st.columns(2)
@@ -230,6 +237,13 @@ def show_edit_event_dialog(event_id, props):
         if col2.button("🗑️ 刪除此公告", type="secondary"):
             delete_event_from_db(event_id)
             st.rerun()
+    else:
+        # 處理未分類或舊資料
+        st.warning("此為舊格式資料或未知類型")
+        if st.button("🗑️ 強制刪除", type="secondary"):
+            delete_event_from_db(event_id)
+            st.rerun()
+
 
 @st.dialog("📢 新增公告 / 交接")
 def show_notice_dialog():
@@ -246,7 +260,7 @@ def show_notice_dialog():
 
 @st.dialog("⚙️ 管理員後台")
 def show_admin_dialog():
-    tab1, tab2, tab3 = st.tabs(["📅 智慧排課", "💰 薪資", "📝 資料設定"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📅 智慧排課", "💰 薪資", "📝 資料設定", "🗑️ 資料管理"])
     
     with tab1:
         st.subheader("批次排課系統")
@@ -326,6 +340,47 @@ def show_admin_dialog():
                 st.session_state['preview_schedule'] = None
                 st.rerun()
 
+    with tab2:
+        col_m1, col_m2 = st.columns(2)
+        q_year = col_m1.number_input("年份", value=datetime.date.today().year)
+        q_month = col_m2.number_input("月份", value=datetime.date.today().month, min_value=1, max_value=12)
+        
+        # 薪資計算
+        if st.button("計算本月薪資"):
+            start_date = datetime.datetime(q_year, q_month, 1)
+            end_date = start_date + relativedelta(months=1)
+            start_str = start_date.isoformat()
+            end_str = end_date.isoformat()
+            
+            # 直接從資料庫抓，不依賴快取以免不準
+            docs = db.collection("shifts").where("type", "==", "shift")\
+                     .where("start", ">=", start_str).where("start", "<", end_str).stream()
+            
+            teachers_cfg = get_teachers_data()
+            report = {}
+            
+            for doc in docs:
+                d = doc.to_dict()
+                t_name = d.get("teacher", "未知")
+                if t_name in ADMINS or t_name == "未知": continue
+                
+                if t_name not in report:
+                    report[t_name] = {"count": 0, "rate": teachers_cfg.get(t_name, {}).get("rate", 0)}
+                report[t_name]["count"] += 1
+                
+            res = []
+            total = 0
+            for name, info in report.items():
+                sub = info["count"] * info["rate"]
+                total += sub
+                res.append({"姓名": name, "單價": info["rate"], "堂數": info["count"], "應發": sub})
+            
+            if res:
+                st.dataframe(res, use_container_width=True)
+                st.metric("總計", f"${total:,}")
+            else:
+                st.info("無紀錄")
+
     with tab3:
         st.subheader("👨‍🏫 師資薪資")
         with st.form("add_teacher"):
@@ -338,22 +393,22 @@ def show_admin_dialog():
                     st.rerun()
         
         st.divider()
-        st.subheader("🎓 學生名單管理")
-        uploaded_file = st.file_uploader("📂 從 Excel/Google Sheet 匯入 (.csv)", type=['csv'])
+        st.subheader("🎓 學生名單")
+        uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入", type=['csv'])
         if uploaded_file is not None:
             try:
                 df = pd.read_csv(uploaded_file)
                 required_cols = ["姓名", "年級", "班別", "聯絡人1", "電話1"]
                 if all(col in df.columns for col in required_cols):
-                    if st.button("確認匯入上述名單"):
+                    if st.button("確認匯入"):
                         new_students = df.to_dict('records')
                         new_students = [{k: (v if pd.notna(v) else "") for k, v in r.items()} for r in new_students]
                         current_data = get_students_data_cached()
                         merged_data = current_data + new_students
                         save_students_data(merged_data)
-                        st.success(f"成功匯入 {len(new_students)} 位學生")
+                        st.success(f"匯入 {len(new_students)} 筆")
                 else:
-                    st.error(f"CSV 格式錯誤！必須包含標題：{required_cols}")
+                    st.error(f"CSV 需包含標題：{required_cols}")
             except Exception as e:
                 st.error(f"讀取失敗: {e}")
 
@@ -370,31 +425,51 @@ def show_admin_dialog():
                 c5, c6 = st.columns(2)
                 ms_c2 = c5.text_input("聯絡人2")
                 ms_p2 = c6.text_input("電話2")
-                
-                if st.form_submit_button("新增學生"):
+                if st.form_submit_button("新增"):
                     if ms_name and ms_grade and ms_class and ms_c1 and ms_p1:
-                        new_record = {
-                            "姓名": ms_name, "年級": ms_grade, "班別": ms_class,
-                            "聯絡人1": ms_c1, "電話1": ms_p1,
-                            "聯絡人2": ms_c2, "電話2": ms_p2
-                        }
+                        new_record = {"姓名": ms_name, "年級": ms_grade, "班別": ms_class, "聯絡人1": ms_c1, "電話1": ms_p1, "聯絡人2": ms_c2, "電話2": ms_p2}
                         current = get_students_data_cached()
                         current.append(new_record)
                         save_students_data(current)
                         st.rerun()
-                    else:
-                        st.error("請填寫所有必填欄位")
+                    else: st.error("缺必填欄位")
         
-        st.write("目前學生列表：")
+        st.caption("學生列表 (可刪除)")
         current_students = get_students_data_cached()
         if current_students:
-            st.dataframe(pd.DataFrame(current_students), use_container_width=True)
-            del_names = [s['姓名'] for s in current_students]
-            to_del = st.multiselect("選擇要刪除的學生", del_names)
-            if to_del and st.button("確認刪除選取學生"):
+            df_stu = pd.DataFrame(current_students)
+            st.dataframe(df_stu, use_container_width=True)
+            to_del = st.multiselect("刪除學生", [s['姓名'] for s in current_students])
+            if to_del and st.button("確認刪除"):
                 new_list = [s for s in current_students if s['姓名'] not in to_del]
                 save_students_data(new_list)
                 st.rerun()
+
+    # ★ TAB 4: 強力資料管理 (解決刪不掉的問題)
+    with tab4:
+        st.subheader("🗑️ 資料庫強制管理")
+        st.caption("這裡列出資料庫中所有的行程與公告，若行事曆上刪不掉，請在此刪除。")
+        
+        # 讀取所有事件 (不快取，確保最新)
+        all_docs = db.collection("shifts").order_by("start", direction=firestore.Query.DESCENDING).stream()
+        data_list = []
+        for doc in all_docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            data_list.append(d)
+        
+        if data_list:
+            for item in data_list:
+                with st.expander(f"{item.get('start')[:10]} - {item.get('title')}"):
+                    c1, c2 = st.columns([3, 1])
+                    c1.write(f"時間: {item.get('start')} ~ {item.get('end')}")
+                    c1.write(f"建立者: {item.get('staff')}")
+                    if c2.button("🗑️ 永久刪除", key=f"del_list_{item['id']}"):
+                        delete_event_from_db(item['id'])
+                        st.rerun()
+        else:
+            st.info("目前資料庫是空的")
+
 
 # --- 5. 主介面邏輯 ---
 
@@ -471,7 +546,6 @@ calendar_options = {
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-# 處理刪除/編輯的邏輯
 if cal_return.get("eventClick"):
     event_id = cal_return["eventClick"]["event"]["id"]
     props = cal_return["eventClick"]["event"]["extendedProps"]
@@ -532,7 +606,6 @@ if st.session_state['user']:
             with col_absent:
                 st.markdown("### 🔴 未到")
                 if current_data['absent']:
-                    # 改為 4 欄格狀排列，節省空間
                     grid_cols = st.columns(4)
                     for i, student in enumerate(current_data['absent']):
                         with grid_cols[i % 4]:
