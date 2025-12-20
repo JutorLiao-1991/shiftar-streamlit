@@ -32,6 +32,9 @@ db = firestore.client()
 
 # --- 2. 身份與常數定義 ---
 ADMINS = ["鳩特", "鳩婆"]
+# ★ 這裡把員工加回來了！
+DEFAULT_STAFFS = ["世軒", "竣揚", "暐傑"] 
+
 TIME_SLOTS = []
 for h in range(9, 22):
     TIME_SLOTS.append(datetime.time(h, 0))
@@ -62,7 +65,7 @@ def get_students_list_cached():
 
 def save_students_list(new_list):
     db.collection("settings").document("students").set({"list": new_list})
-    get_students_list_cached.clear() # 清除快取
+    get_students_list_cached.clear() 
     st.toast("學生名單已更新")
 
 # C. 環境清潔
@@ -99,7 +102,6 @@ def get_all_events_cached():
             })
     except: pass
     
-    # 國定假日
     try:
         year = datetime.date.today().year
         resp = requests.get(f"https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json").json()
@@ -119,7 +121,7 @@ def add_event_to_db(title, start, end, type, user, location="", teacher_name="")
         "teacher": teacher_name, 
         "created_at": datetime.datetime.now()
     })
-    get_all_events_cached.clear() # 清除快取，強制更新
+    get_all_events_cached.clear()
 
 # E. 薪資計算
 def calculate_salary(year, month):
@@ -154,8 +156,9 @@ def calculate_salary(year, month):
 @st.dialog("👤 人員登入")
 def show_login_dialog():
     teachers_cfg = get_teachers_data()
-    staff_list = list(teachers_cfg.keys())
-    all_login_users = list(set(ADMINS + staff_list))
+    db_staff = list(teachers_cfg.keys())
+    # ★ 這裡做了修正：合併 管理員 + 預設員工 + 資料庫老師
+    all_login_users = list(set(ADMINS + DEFAULT_STAFFS + db_staff))
     
     user = st.selectbox("請選擇您的身份", ["請選擇"] + all_login_users)
     password = ""
@@ -174,8 +177,11 @@ def show_login_dialog():
 def show_cleaning_dialog(area_name):
     st.write(f"登記 **{area_name}** 清潔")
     teachers_cfg = get_teachers_data()
-    staff_list = list(teachers_cfg.keys())
-    cleaner = st.selectbox("清潔人員", staff_list)
+    db_staff = list(teachers_cfg.keys())
+    # ★ 清潔人員也包含預設員工
+    all_cleaners = list(set(DEFAULT_STAFFS + db_staff))
+    
+    cleaner = st.selectbox("清潔人員", all_cleaners)
     if st.button("確認已掃拖", use_container_width=True):
         log_cleaning(area_name, cleaner)
         st.rerun()
@@ -196,13 +202,13 @@ def show_admin_dialog():
     tab1, tab2, tab3 = st.tabs(["📅 排課", "💰 薪資", "📝 設定"])
     teachers_cfg = get_teachers_data()
     teacher_names = list(teachers_cfg.keys())
-    if st.session_state['user'] not in teacher_names and st.session_state['user'] not in ADMINS:
-         teacher_names.append(st.session_state['user'])
+    # 確保選單裡有預設員工
+    full_teacher_list = list(set(ADMINS + DEFAULT_STAFFS + teacher_names))
     
     with tab1:
         c1, c2 = st.columns(2)
         s_date = c1.date_input("日期")
-        s_teacher = c2.selectbox("授課師資", ["請選擇"] + ADMINS + teacher_names)
+        s_teacher = c2.selectbox("授課師資", ["請選擇"] + full_teacher_list)
         c3, c4 = st.columns(2)
         s_start = c3.selectbox("開始", TIME_SLOTS, index=18)
         s_end = c4.selectbox("結束", TIME_SLOTS, index=24)
@@ -313,21 +319,21 @@ if st.session_state['user']:
         if st.session_state['is_admin']:
             if st.button("⚙️ 後台管理", type="primary", use_container_width=True): show_admin_dialog()
 
-# 行事曆 (優化版)
+# 行事曆 (手機視圖條列化)
 all_events = get_all_events_cached()
 calendar_options = {
     "editable": False,
     "headerToolbar": {
         "left": "today prev,next",
         "center": "title",
-        "right": "listMonth,dayGridMonth" # 預設提供兩種
+        "right": "listMonth,dayGridMonth"
     },
-    "initialView": "listMonth", # 預設為條列式 (手機不擁擠)
-    "height": "650px", # ★ 強制高度，解決被腰斬的問題
+    "initialView": "listMonth",
+    "height": "650px", 
 }
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick'])
 
-# --- 6. 點名系統 (極速版) ---
+# --- 6. 點名系統 ---
 st.divider()
 st.subheader("📋 每日點名")
 
@@ -339,7 +345,6 @@ if cal_return and "dateClick" in cal_return:
 st.info(f"日期：**{selected_date}**")
 
 date_key = str(selected_date)
-# 確保初始化
 if date_key not in st.session_state:
     st.session_state[date_key] = {
         "absent": get_students_list_cached(),
@@ -354,7 +359,6 @@ if st.session_state['user']:
     with st.expander("點名表單", expanded=True):
         col_absent, col_present, col_leave = st.columns(3)
         
-        # 顯示按鈕 (純快取操作，速度極快)
         with col_absent:
             st.markdown("### 🔴 未到")
             for student in current_data['absent']:
@@ -386,12 +390,10 @@ if st.session_state['user']:
                     current_data['dirty'] = True
                     st.rerun()
 
-    # 儲存按鈕 (狀態更動後變紅)
     btn_type = "primary" if current_data.get('dirty', False) else "secondary"
     btn_text = "💾 儲存 (有更動)" if current_data.get('dirty', False) else "💾 資料已儲存"
     
     if st.button(btn_text, type=btn_type, use_container_width=True):
-        # 這裡未來可接 add_rollcall_to_db(...)
         current_data['dirty'] = False
         st.success(f"已儲存：出席 {len(current_data['present'])} 人，請假 {len(current_data['leave'])} 人")
         st.rerun()
