@@ -79,6 +79,7 @@ def save_students_data(new_data_list):
     get_students_data_cached.clear()
     st.toast("學生名單已更新")
 
+# ★ 關鍵修正：這裡加入了 sanitize 機制，解決報錯
 @st.cache_data(ttl=600)
 def get_all_events_cached():
     events = []
@@ -99,6 +100,16 @@ def get_all_events_cached():
                 elif category == "活動": color = "#0d6efd"
                 else: color = "#ffc107"
             
+            # --- 修正開始：將 datetime 物件轉為字串 ---
+            sanitized_props = {}
+            for k, v in data.items():
+                # 如果值是 datetime 或 date 類型，轉成字串
+                if isinstance(v, (datetime.datetime, datetime.date)):
+                    sanitized_props[k] = str(v)
+                else:
+                    sanitized_props[k] = v
+            # --- 修正結束 ---
+
             events.append({
                 "id": doc.id,
                 "title": title_text, 
@@ -106,7 +117,7 @@ def get_all_events_cached():
                 "end": data.get("end"),
                 "color": color, 
                 "allDay": data.get("type") == "notice",
-                "extendedProps": data
+                "extendedProps": sanitized_props # 使用淨化後的資料
             })
     except: pass
     
@@ -187,7 +198,6 @@ def show_login_dialog():
         else:
             st.error("密碼錯誤")
 
-# 這裡負責刪除/編輯功能
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
     st.write(f"正在編輯：**{props.get('title', '')}**")
@@ -205,13 +215,13 @@ def show_edit_event_dialog(event_id, props):
             st.rerun()
             
     elif props.get('type') == 'notice':
-        # 修正：確保分類預設值正確
         cat_opts = ["調課", "考試", "活動", "其他"]
         curr_cat = props.get('category', '其他')
         idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 3
         
         new_cat = st.selectbox("分類", cat_opts, index=idx)
-        new_content = st.text_area("內容", props.get('title')) # 注意：title 欄位在此存內容
+        # title 存內容
+        new_content = st.text_area("內容", props.get('title')) 
         
         col1, col2 = st.columns(2)
         if col1.button("💾 儲存修改", type="primary"):
@@ -224,14 +234,12 @@ def show_edit_event_dialog(event_id, props):
 @st.dialog("📢 新增公告 / 交接")
 def show_notice_dialog():
     notice_date = st.date_input("日期", datetime.date.today())
-    # ★ 這裡就是你要的分類選單
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
     
     if st.button("發布公告", use_container_width=True):
         start_dt = datetime.datetime.combine(notice_date, datetime.time(9,0))
         end_dt = datetime.datetime.combine(notice_date, datetime.time(10,0))
-        # 這裡 title 存內容，方便顯示
         add_event_to_db(notice_content, start_dt, end_dt, "notice", st.session_state['user'], category=category)
         st.toast("公告已發布")
         st.rerun()
@@ -488,7 +496,7 @@ for e in all_events:
     if e.get('start', '').startswith(s_date_str) and 'extendedProps' in e:
         props = e['extendedProps']
         if props.get('type') == 'shift':
-            daily_courses.append(props.get('title', '')) # 這裡存的是班別名稱
+            daily_courses.append(props.get('title', ''))
 
 # 2. 篩選學生
 all_students = get_students_data_cached()
@@ -502,9 +510,8 @@ else:
     st.write("📅 今日無排課紀錄")
 
 date_key = str(selected_date)
-# 如果該日期還沒初始化，或是「今天有課」且「名單為空(可能剛排完課)」，則初始化
+# 初始化邏輯：當鍵不存在，或「今日有課」且「未到名單為空」（防止資料卡住）時重置
 if date_key not in st.session_state or (daily_courses and not st.session_state[date_key]['absent'] and not st.session_state[date_key]['present']):
-    # 簡單邏輯：如果是新的日期，或者強制重整，就載入
     if date_key not in st.session_state:
         st.session_state[date_key] = {
             "absent": target_students,
@@ -522,14 +529,13 @@ if st.session_state['user']:
         with st.expander("點名表單", expanded=True):
             col_absent, col_present, col_leave = st.columns(3)
             
-            # --- 優化重點：未到區改為 4 欄格狀排列，節省空間 ---
             with col_absent:
                 st.markdown("### 🔴 未到")
                 if current_data['absent']:
-                    # 建立 4 個小欄位
+                    # 改為 4 欄格狀排列，節省空間
                     grid_cols = st.columns(4)
                     for i, student in enumerate(current_data['absent']):
-                        with grid_cols[i % 4]: # 循環放入 0,1,2,3 欄
+                        with grid_cols[i % 4]:
                             if st.button(student, key=f"abs_{student}_{date_key}", use_container_width=True):
                                 current_data['absent'].remove(student)
                                 current_data['present'].append(student)
