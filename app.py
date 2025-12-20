@@ -118,7 +118,7 @@ def get_all_events_cached():
             if data.get("type") == "shift":
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
-                # ★ 月曆簡化顯示：課程 (老師)
+                # 月曆簡化顯示
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
                 
@@ -292,11 +292,15 @@ def show_notice_dialog(default_date=None):
     if default_date is None:
         default_date = datetime.date.today()
     st.info(f"正在建立 **{default_date}** 的事項")
+    
+    # 讓使用者可以在此彈窗修改日期 (因為按鈕開啟時預設是今天)
+    edit_date = st.date_input("日期", default_date)
+    
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
     if st.button("發布公告", use_container_width=True):
-        start_dt = datetime.datetime.combine(default_date, datetime.time(9,0))
-        end_dt = datetime.datetime.combine(default_date, datetime.time(10,0))
+        start_dt = datetime.datetime.combine(edit_date, datetime.time(9,0))
+        end_dt = datetime.datetime.combine(edit_date, datetime.time(10,0))
         add_event_to_db(notice_content, start_dt, end_dt, "notice", st.session_state['user'], category=category)
         st.toast("公告已發布")
         st.rerun()
@@ -656,8 +660,14 @@ for i, area in enumerate(areas):
 st.divider()
 
 if st.session_state['user']:
+    # ★ 恢復：新增公告/交接按鈕 (解決手機列表模式無法點擊的問題)
+    c_act1, c_act2 = st.columns([1, 4])
+    with c_act1:
+        if st.button("➕ 新增公告/交接", type="primary", use_container_width=True):
+            show_notice_dialog() # 預設今天
+    
     if st.session_state['is_admin']:
-        if st.button("⚙️ 管理員後台", type="primary", use_container_width=True): show_admin_dialog()
+        if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
 
 # 行事曆
 all_events = get_all_events_cached()
@@ -686,19 +696,16 @@ calendar_options = {
         "dayGridMonth": {"displayEventTime": False}, 
         "listMonth": {"displayEventTime": True}
     },
-    # ★ 關鍵修正：關閉 Selectable，解決點擊衝突
-    "selectable": False, 
+    "selectable": False,
     "scrollTime": datetime.datetime.now().strftime("%H:%M:%S")
 }
 
 cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-# ★ 關鍵修正：強化日期解析，防止怪格式報錯
+# 日期解析修復 (Month View 專用)
 if cal_return.get("dateClick"):
     clicked_date_str = cal_return["dateClick"]["date"]
-    
-    # 這裡是最重要的修正：只取前10個字元 (YYYY-MM-DD)，無視後面任何 T/Z
-    clean_date_str = clicked_date_str[:10] 
+    clean_date_str = clicked_date_str[:10]
     
     try:
         date_obj = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
@@ -707,7 +714,7 @@ if cal_return.get("dateClick"):
         else:
             st.toast("請先登入才能新增事項", icon="🔒")
     except ValueError:
-        st.error(f"日期解析錯誤，原始資料：{clicked_date_str}")
+        st.error(f"日期解析錯誤：{clicked_date_str}")
 
 if cal_return.get("eventClick"):
     event_id = cal_return["eventClick"]["event"]["id"]
@@ -736,7 +743,6 @@ for e in all_events:
     if e.get('start', '').startswith(s_date_str) and 'extendedProps' in e:
         props = e['extendedProps']
         if props.get('type') == 'shift':
-            # ★ 讀取原始 title (班級名)
             daily_courses.append(props.get('title', ''))
 
 all_students = get_students_data_cached()
