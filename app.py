@@ -39,6 +39,14 @@ LOGIN_LIST = ["鳩特", "鳩婆", "世軒", "竣揚", "暐傑"]
 STAFF_PASSWORD = "88888888"
 ADMIN_PASSWORD = "150508"
 
+# ★ 定義完整年級清單
+GRADE_OPTIONS = [
+    "小一", "小二", "小三", "小四", "小五", "小六",
+    "國一", "國二", "國三",
+    "高一", "高二", "高三",
+    "畢業"
+]
+
 TIME_OPTIONS = []
 for h in range(9, 23):
     TIME_OPTIONS.append(f"{h:02d}:00")
@@ -48,10 +56,26 @@ for h in range(9, 23):
 # --- 3. 資料庫存取 (快取層) ---
 
 def get_unique_course_names():
+    # ★ 更新預設課程清單，並與資料庫合併
+    default_courses = [
+        "小四數學", "小五數學", "小六數學",
+        "國一數學", "國二數學", "國三數學", "國二理化", "國二自然",
+        "高一數學", "高一物理", "高一化學"
+    ]
     doc = db.collection("settings").document("courses").get()
     if doc.exists:
-        return doc.to_dict().get("list", ["國一數學", "國二數學", "國三數學", "高一數學", "國二理化"])
-    return ["國一數學", "國二數學", "國三數學", "高一數學", "國二理化"]
+        saved_list = doc.to_dict().get("list", [])
+        # 合併並去除重複，然後簡單排序讓它好找一點
+        combined = list(set(default_courses + saved_list))
+        # 這裡做一個簡單的自訂排序邏輯：小->國->高
+        def sort_key(x):
+            order = ["小", "國", "高"]
+            for i, prefix in enumerate(order):
+                if x.startswith(prefix):
+                    return (i, x)
+            return (99, x)
+        return sorted(combined, key=sort_key)
+    return default_courses
 
 def save_course_name(course_name):
     current = get_unique_course_names()
@@ -120,21 +144,18 @@ def get_all_events_cached():
                 course = data.get("title", "課程")
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
-                
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
                 title_text = f"{staff_name}"
                 color = "#6f42c1"
-                
             elif data.get("type") == "notice":
                 category = data.get("category", "其他")
                 title_text = f"[{category}] {title_text}"
                 if category == "調課": color = "#d63384"
                 elif category == "考試": color = "#dc3545"
                 elif category == "活動": color = "#0d6efd"
-                # ★ 新增：任務分類的顏色與標示
                 elif category == "任務": 
-                    color = "#FF4500" # 鮮豔橘紅
+                    color = "#FF4500"
                     title_text = f"🔥 {title_text}"
                 else: color = "#ffc107"
             
@@ -272,7 +293,6 @@ def show_edit_event_dialog(event_id, props):
             st.rerun()
             
     elif props.get('type') == 'notice':
-        # ★ 加入「任務」選項
         cat_opts = ["調課", "考試", "活動", "任務", "其他"]
         curr_cat = props.get('category', '其他')
         idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 4
@@ -296,8 +316,8 @@ def show_notice_dialog(default_date=None):
     if default_date is None:
         default_date = datetime.date.today()
     st.info(f"正在建立 **{default_date}** 的事項")
+    
     edit_date = st.date_input("日期", default_date)
-    # ★ 加入「任務」選項
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "任務", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
     if st.button("發布公告", use_container_width=True):
@@ -422,7 +442,6 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        # ★ 回歸 7 欄網格 (週曆模式：日~六)
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         cols = st.columns(7)
         weekdays = ["日", "一", "二", "三", "四", "五", "六"] # 星期日開始
@@ -430,7 +449,6 @@ def show_admin_dialog():
             cols[idx].write(f"**{w}**")
             
         selected_dates = []
-        # 計算 1 號是星期幾 (Python: 0=Mon, 6=Sun) -> 我們要 0=Sun, 6=Sat
         first_day_weekday_raw = datetime.date(pt_year, pt_month, 1).weekday()
         first_day_col_idx = (first_day_weekday_raw + 1) % 7
         
@@ -439,17 +457,14 @@ def show_admin_dialog():
         
         for day in range(1, num_days + 1):
             curr_date = datetime.date(pt_year, pt_month, day)
-            # 取得該日期的星期幾標籤，方便手機閱讀
             day_label = f"{day} ({weekdays[col_idx]})"
-            
             with cols[col_idx]:
                 if st.checkbox(day_label, key=f"pt_day_{day}"):
                     selected_dates.append(curr_date)
-            
             col_idx += 1
             if col_idx > 6:
                 col_idx = 0
-                cols = st.columns(7) # 換行
+                cols = st.columns(7)
                 
         st.divider()
         if st.button(f"確認排入 {len(selected_dates)} 個班次", type="primary", key="save_pt"):
@@ -555,7 +570,9 @@ def show_admin_dialog():
             with st.form("manual_student"):
                 ms_name = st.text_input("姓名 (必填)")
                 c1, c2 = st.columns(2)
-                ms_grade = c1.text_input("年級 (必填)")
+                # ★ 年級欄位升級：改為 Selectbox，並使用 GRADE_OPTIONS
+                ms_grade = c1.selectbox("年級 (必填)", GRADE_OPTIONS)
+                
                 course_opts = get_unique_course_names()
                 ms_class = c2.selectbox("班別 (必填)", course_opts)
                 c3, c4 = st.columns(2)
@@ -737,6 +754,7 @@ st.info(f"日期：**{selected_date}**")
 
 daily_courses = []
 s_date_str = selected_date.isoformat()
+# 注意：這裡要重新讀取一次事件
 all_events_main = get_all_events_cached()
 
 for e in all_events_main:
