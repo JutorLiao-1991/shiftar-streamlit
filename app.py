@@ -15,6 +15,19 @@ from collections import defaultdict # 用於整理日期
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
+# ★ CSS 優化：強制讓多欄位在手機上並排，不堆疊
+st.markdown("""
+<style>
+    [data-testid="column"] {
+        min-width: 0px !important;
+        padding: 0px !important;
+    }
+    div[data-testid="stCheckbox"] {
+        padding-top: 5px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 if 'user' not in st.session_state:
     st.session_state['user'] = None
 if 'is_admin' not in st.session_state:
@@ -142,12 +155,10 @@ def get_all_events_cached():
                 course = data.get("title", "課程")
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
-                
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
                 title_text = f"{staff_name}"
                 color = "#6f42c1"
-                
             elif data.get("type") == "notice":
                 category = data.get("category", "其他")
                 title_text = f"[{category}] {title_text}"
@@ -427,7 +438,7 @@ def show_admin_dialog():
 
     with tab2:
         st.subheader("👷 工讀生排班系統")
-        st.caption("請選擇工讀生與月份，勾選後按確認。")
+        st.caption("請選擇工讀生與月份，然後勾選上班日期。")
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
@@ -441,41 +452,37 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        # ★ 重新設計排班介面：以「星期」為橫列 (Transposed Layout)
-        # 目標：日 1 8 15 22 29 (在同一行)
+        # ★ 橫向列表式排班 (Transposed)
+        # 第一列：日 | 1 | 8 | 15 ...
         
-        # 1. 整理該月所有日期，歸類到星期 0-6
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         
-        # 使用 dict 存放每個星期的日期物件: {6: [dt1, dt8...], 0: [dt2, dt9...]}
+        # 1. 將該月日期分組
         week_map = defaultdict(list)
-        
         for day in range(1, num_days + 1):
             curr_date = datetime.date(pt_year, pt_month, day)
-            wk_idx = curr_date.weekday() # 0=Mon, 6=Sun
-            week_map[wk_idx].append(curr_date)
+            week_map[curr_date.weekday()].append(curr_date) # 0=Mon, 6=Sun
             
-        # 2. 顯示順序：日 -> 六
-        display_order = [6, 0, 1, 2, 3, 4, 5] # Sun, Mon, Tue...
+        display_order = [6, 0, 1, 2, 3, 4, 5] # Sun -> Sat
         display_names = ["日", "一", "二", "三", "四", "五", "六"]
         
         selected_dates = []
         
-        # 3. 繪製每一行 (Row)
+        # 2. 顯示每一列 (Row)
         for i, wk_idx in enumerate(display_order):
             dates = week_map[wk_idx]
             
-            # 使用 columns：第1欄顯示星期，後面顯示日期
-            # 比例：標題佔 0.5，後面日期均分
-            # 注意：一個月最多有 5 個同一星期幾的日子 (例如 5 個星期日)
+            # 使用 columns，第一欄是標題，後面是日期
+            # 手機上因為有 CSS min-width:0，所以不會換行
             cols = st.columns([0.5, 1, 1, 1, 1, 1])
             
             # 標題
             cols[0].markdown(f"**{display_names[i]}**")
             
-            # 填入日期
+            # 日期
             for j, date_obj in enumerate(dates):
                 with cols[j+1]:
+                    # 這裡只顯示數字，不顯示 "日"
                     if st.checkbox(f"{date_obj.day}", key=f"pt_d_{date_obj.day}"):
                         selected_dates.append(date_obj)
                         
