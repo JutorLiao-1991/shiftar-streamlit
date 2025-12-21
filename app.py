@@ -15,7 +15,7 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# CSS 優化：強制手機版面不亂跑
+# CSS 優化
 st.markdown("""
 <style>
     [data-testid="column"] {
@@ -24,6 +24,9 @@ st.markdown("""
     }
     div[data-testid="stCheckbox"] {
         padding-top: 5px;
+    }
+    div[data-testid="stCheckbox"] label {
+        min-height: 0px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -139,7 +142,7 @@ def promote_student_grade(grade_str):
     if g == "畢業": return "畢業"
     return g
 
-# ★ 點名資料庫功能
+# ★ 點名資料庫功能 (無快取，確保即時性)
 def get_roll_call_from_db(date_str):
     doc = db.collection("roll_call_records").document(date_str).get()
     if doc.exists:
@@ -366,7 +369,6 @@ def show_promotion_confirm_dialog():
         st.success(f"成功升級 {promoted_count} 位學生！")
         st.rerun()
 
-# ★ 新增：權限下放，所有員工可用的資料管理
 @st.dialog("📂 資料管理")
 def show_general_management_dialog():
     tab1, tab2 = st.tabs(["🎓 學生名單", "👷 工讀生名單"])
@@ -623,17 +625,6 @@ def show_admin_dialog():
                 st.info("無紀錄")
 
     with tab4:
-        st.subheader("👨‍🏫 師資薪資")
-        with st.form("add_teacher"):
-            c_t1, c_t2 = st.columns([2, 1])
-            new_t_name = c_t1.text_input("老師姓名")
-            new_t_rate = c_t2.number_input("單價", min_value=0, step=100)
-            if st.form_submit_button("更新"):
-                if new_t_name:
-                    save_teacher_data(new_t_name, new_t_rate)
-                    st.rerun()
-        
-    with tab5:
         st.subheader("🗑️ 資料庫強制管理 (批次刪除)")
         st.caption("請小心使用，刪除後無法復原。")
         all_docs = db.collection("shifts").order_by("start", direction=firestore.Query.DESCENDING).stream()
@@ -744,10 +735,10 @@ calendar_options = {
         "center": "title",
         "right": "listMonth,dayGridMonth"
     },
-    "initialView": "dayGridMonth", # ★ 恢復預設為月曆
+    "initialView": "dayGridMonth", 
     "height": "650px",
     "locale": "zh-tw",
-    "titleFormat": {"year": "numeric", "month": "long"},
+    "titleFormat": {"year": "2-digit", "month": "numeric"},
     "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
     "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
     "views": {
@@ -763,24 +754,19 @@ cal_return = calendar(events=all_events, options=calendar_options, callbacks=['d
 if cal_return.get("dateClick"):
     clicked_date_str = cal_return["dateClick"]["date"]
     try:
-        # ★ 修正日期偏移 bug：如果有時區資訊，轉換回台灣時間
+        # ★ 修正日期偏移 bug
         if "T" in clicked_date_str:
              if clicked_date_str.endswith("Z"):
                  clicked_date_str = clicked_date_str.replace("Z", "+00:00")
              dt_utc = datetime.datetime.fromisoformat(clicked_date_str)
-             # 若無時區則補上 UTC
              if dt_utc.tzinfo is None:
                  dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
-             # 轉台灣時間
              tz_tw = pytz.timezone('Asia/Taipei')
              date_obj = dt_utc.astimezone(tz_tw).date()
         else:
              date_obj = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
         
-        # 更新選取日期供點名使用
         st.session_state['selected_calendar_date'] = date_obj
-        
-        # 如果需要點日期直接跳公告，解除以下註解
         if st.session_state['user']:
              show_notice_dialog(default_date=date_obj)
              
@@ -794,7 +780,7 @@ if cal_return.get("eventClick"):
         show_edit_event_dialog(event_id, props)
 
 
-# --- 6. 智慧點名系統 (資料庫版) ---
+# --- 6. 智慧點名系統 (資料庫版 - 即時更新) ---
 st.divider()
 st.subheader("📋 每日點名")
 
@@ -808,7 +794,7 @@ st.info(f"正在檢視：**{selected_date}** 的點名紀錄")
 
 date_key = selected_date.isoformat()
 
-# 1. 從 Firebase 讀取紀錄
+# ★ 1. 每次都從資料庫讀取最新狀態
 db_record = get_roll_call_from_db(date_key)
 
 # 2. 計算當日應到學生
@@ -816,16 +802,6 @@ daily_courses = []
 all_events_main = get_all_events_cached()
 for e in all_events_main:
     if e.get('start', '').startswith(date_key) and e.get('extendedProps', {}).get('type') == 'shift':
-        # 這裡需要注意 title 是否包含 [教室] 等前綴，如果有需要清洗
-        # 假設存入時是純班名，讀取時也是純班名 (除非被 get_all_events 加工過)
-        # get_all_events 確實加工過 title，所以我們要讀 extendedProps 裡的 title (如果存的時候有存的話)
-        # 檢查 add_event_to_db，我們有存 teacher_name, category 等，但 title 是被存為 [教室]... 嗎？
-        # 看 add_event_to_db: title 參數直接存入。而在排課時，我們傳入的是 s_course_name (純班名)
-        # 所以 extendedProps['title'] 應該是純班名 (因為 firebase 存的是純班名)
-        # 但是 get_all_events 裡面的 title 是被加工過的
-        # 我們直接用 extendedProps['title'] 應該是安全的，前提是它沒被覆蓋
-        # 檢查 get_all_events_cached: 它把 data (即 extendedProps) 放入 events
-        # 而 data['title'] 是原始的。
         daily_courses.append(e.get('extendedProps', {}).get('title', ''))
 
 all_students = get_students_data_cached()
@@ -838,65 +814,76 @@ if daily_courses:
 else:
     st.write("📅 當日無排課紀錄")
 
-# 3. 初始化 Session State
-if f"roll_loaded_{date_key}" not in st.session_state:
-    if db_record:
-        st.session_state[f"roll_{date_key}"] = db_record
-    else:
-        st.session_state[f"roll_{date_key}"] = {
-            "absent": target_students,
-            "present": [],
-            "leave": [],
-            "dirty": False
-        }
-    st.session_state[f"roll_loaded_{date_key}"] = True
+# ★ 3. 準備當前顯示資料 (不依賴 Session State 快取)
+if db_record:
+    # 資料庫有資料，直接用
+    current_data = db_record
+else:
+    # 資料庫沒資料，顯示預設 (全體未到)
+    current_data = {
+        "absent": target_students,
+        "present": [],
+        "leave": []
+    }
 
-current_roll = st.session_state[f"roll_{date_key}"]
+# 輔助函式：更新並寫入資料庫
+def update_status_and_save(student_name, from_list_name, to_list_name):
+    # 移動學生
+    current_data[from_list_name].remove(student_name)
+    current_data[to_list_name].append(student_name)
+    
+    # 準備寫入物件
+    save_data = {
+        "absent": current_data['absent'],
+        "present": current_data['present'],
+        "leave": current_data['leave'],
+        "updated_at": datetime.datetime.now().isoformat(),
+        "updated_by": st.session_state['user']
+    }
+    
+    # 寫入 DB
+    save_roll_call_to_db(date_key, save_data)
+    # 重新執行以顯示最新狀態
+    st.rerun()
 
+# 4. 顯示介面
 if st.session_state['user']:
-    if not current_roll['absent'] and not current_roll['present'] and not current_roll['leave']:
+    if not current_data['absent'] and not current_data['present'] and not current_data['leave']:
         st.info("無須點名")
     else:
+        # 新增手動刷新按鈕 (給 B 老師用)
+        if st.button("🔄 刷新數據 (同步最新狀態)", use_container_width=True):
+            st.rerun()
+
         with st.expander("點名表單", expanded=True):
             col_absent, col_present, col_leave = st.columns(3)
             
             with col_absent:
                 st.markdown("### 🔴 未到")
-                if current_roll['absent']:
-                    # Grid layout for buttons
+                if current_data['absent']:
                     cols = st.columns(4)
-                    for i, s in enumerate(current_roll['absent']):
+                    for i, s in enumerate(current_data['absent']):
                         if cols[i%4].button(s, key=f"ab_{s}_{date_key}"):
-                            current_roll['absent'].remove(s); current_roll['present'].append(s); current_roll['dirty'] = True; st.rerun()
+                            update_status_and_save(s, "absent", "present")
+                else:
+                    st.caption("全勤！")
+
             with col_present:
                 st.markdown("### 🟢 已到")
-                for s in current_roll['present']:
+                for s in current_data['present']:
                     if st.button(f"✅ {s}", key=f"pr_{s}_{date_key}", type="primary", use_container_width=True):
-                        current_roll['present'].remove(s); current_roll['absent'].append(s); current_roll['dirty'] = True; st.rerun()
+                        update_status_and_save(s, "present", "absent")
+
             with col_leave:
                 st.markdown("### 🟡 請假")
-                leave_opts = ["選擇..."] + current_roll['absent']
+                leave_opts = ["選擇..."] + current_data['absent']
                 move_to_leave = st.selectbox("請假", leave_opts, key=f"lv_sel_{date_key}")
                 if move_to_leave != "選擇...":
-                    current_roll['absent'].remove(move_to_leave); current_roll['leave'].append(move_to_leave); current_roll['dirty'] = True; st.rerun()
-                for s in current_roll['leave']:
+                    update_status_and_save(move_to_leave, "absent", "leave")
+                
+                for s in current_data['leave']:
                     if st.button(f"🤒 {s}", key=f"le_{s}_{date_key}", use_container_width=True):
-                        current_roll['leave'].remove(s); current_roll['absent'].append(s); current_roll['dirty'] = True; st.rerun()
+                        update_status_and_save(s, "leave", "absent")
 
-        btn_type = "primary" if current_roll.get('dirty', False) else "secondary"
-        btn_text = "💾 儲存點名紀錄" if current_roll.get('dirty', False) else "💾 資料已儲存 (可再更新)"
-        
-        if st.button(btn_text, type=btn_type, use_container_width=True):
-            save_data = {
-                "absent": current_roll['absent'],
-                "present": current_roll['present'],
-                "leave": current_roll['leave'],
-                "updated_at": datetime.datetime.now().isoformat(),
-                "updated_by": st.session_state['user']
-            }
-            save_roll_call_to_db(date_key, save_data)
-            current_roll['dirty'] = False
-            st.success(f"已儲存 {selected_date} 的點名紀錄！")
-            st.rerun()
 else:
     st.warning("請登入以進行點名")
