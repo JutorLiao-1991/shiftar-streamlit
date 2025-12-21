@@ -15,10 +15,10 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# CSS 優化：只保留最關鍵的防換行設定，移除會破壞版面的 flex
+# CSS 優化：只保留最關鍵的防換行設定，移除可能導致卡住的樣式
 st.markdown("""
 <style>
-    /* 讓欄位最小寬度為 0，防止被強制換行，但不強制 flex 比例，以免影響登入框 */
+    /* 讓欄位最小寬度為 0，防止被強制換行 */
     [data-testid="column"] {
         min-width: 0px !important;
         padding: 0px !important;
@@ -27,6 +27,7 @@ st.markdown("""
     div[data-testid="stCheckbox"] {
         padding-top: 5px;
         min-height: 0px;
+        text-align: center;
     }
     div[data-testid="stCheckbox"] label {
         min-height: 0px;
@@ -34,6 +35,11 @@ st.markdown("""
     /* 縮小多個表格之間的間距 */
     .stDataFrame {
         margin-bottom: -1rem;
+    }
+    /* 讓星期標題置中 */
+    div[data-testid="stMarkdownContainer"] p {
+        text-align: center;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -261,34 +267,32 @@ def log_cleaning(area, user):
 
 # --- 4. 彈出視窗 UI ---
 
-# ★ 修正：改用 st.form 確保登入穩定
+# ★ 修正：移除 st.form，改回直接按鈕觸發，確保手機登入正常
 @st.dialog("👤 人員登入")
 def show_login_dialog():
-    with st.form("login_form"):
-        user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
-        password = st.text_input("請輸入密碼", type="password")
-        submitted = st.form_submit_button("登入", use_container_width=True)
-        
-        if submitted:
-            if user == "請選擇": 
-                st.error("請選擇身份")
+    user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
+    password = st.text_input("請輸入密碼", type="password")
+    
+    if st.button("登入", use_container_width=True):
+        if user == "請選擇": 
+            st.error("請選擇身份")
+        else:
+            is_valid = False
+            is_admin = False
+            if user in ADMINS:
+                if password == ADMIN_PASSWORD:
+                    is_valid = True
+                    is_admin = True
             else:
-                is_valid = False
-                is_admin = False
-                if user in ADMINS:
-                    if password == ADMIN_PASSWORD:
-                        is_valid = True
-                        is_admin = True
-                else:
-                    if password == STAFF_PASSWORD:
-                        is_valid = True
-                
-                if is_valid:
-                    st.session_state['user'] = user
-                    st.session_state['is_admin'] = is_admin
-                    st.rerun()
-                else:
-                    st.error("密碼錯誤")
+                if password == STAFF_PASSWORD:
+                    is_valid = True
+            
+            if is_valid:
+                st.session_state['user'] = user
+                st.session_state['is_admin'] = is_admin
+                st.rerun()
+            else:
+                st.error("密碼錯誤")
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
@@ -351,7 +355,6 @@ def show_notice_dialog(default_date=None):
         st.toast("公告已發布")
         st.rerun()
 
-# ★ 新增：回顧點名表
 @st.dialog("📅 回顧點名紀錄")
 def show_roll_call_review_dialog():
     st.info("請選擇要查看或補點名的日期")
@@ -502,6 +505,7 @@ def show_admin_dialog():
                 st.session_state['preview_schedule'] = None
                 st.rerun()
 
+    # ★ 工讀生排班：分週次表格 (週曆模式)
     with tab2:
         st.subheader("👷 工讀生排班系統")
         st.caption("請選擇工讀生與月份，然後直接在表格中勾選。")
@@ -518,7 +522,7 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        # 標題列：日 一 二 ... 六 (手機 CSS 強制不換行)
+        # 標題列
         cols = st.columns(7)
         weekdays = ["日", "一", "二", "三", "四", "五", "六"] 
         for idx, w in enumerate(weekdays):
@@ -527,10 +531,9 @@ def show_admin_dialog():
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         all_dates = [datetime.date(pt_year, pt_month, d) for d in range(1, num_days + 1)]
         
-        # 將日期分組為週 (以星期日為一週開始)
+        # 分週邏輯
         weeks = []
         current_week = []
-        
         first_day_weekday = all_dates[0].weekday() 
         start_padding = (first_day_weekday + 1) % 7
         for _ in range(start_padding):
@@ -549,12 +552,12 @@ def show_admin_dialog():
             
         selected_dates_from_table = []
         
+        # 產生表格
         for w_idx, week_dates in enumerate(weeks):
-            week_data = {}
-            date_map = {} 
             col_names = [f"c{i}" for i in range(7)]
             row_data = {}
             col_config = {}
+            date_map = {}
             
             for i, d in enumerate(week_dates):
                 col_key = col_names[i]
@@ -567,7 +570,6 @@ def show_admin_dialog():
                     row_data[col_key] = False 
             
             df_week = pd.DataFrame([row_data]) 
-            
             edited_week = st.data_editor(
                 df_week,
                 column_config=col_config,
@@ -695,10 +697,10 @@ for i, area in enumerate(areas):
 st.divider()
 
 if st.session_state['user']:
-    # ★ 改為「點名紀錄」按鈕，移除「新增公告」按鈕
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("📅 點名紀錄", type="primary", use_container_width=True):
+        # ★ 回顧點名按鈕
+        if st.button("📅 回顧點名表", type="primary", use_container_width=True):
             show_roll_call_review_dialog()
             
     if st.button("📂 資料管理", type="secondary", use_container_width=True): show_general_management_dialog()
@@ -719,7 +721,7 @@ calendar_options = {
 }
 cal = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-# 點擊日期：只跳出新增公告，不連動下方點名
+# 點擊日期：只開公告
 if cal.get("dateClick"):
     clicked = cal["dateClick"]["date"]
     try:
@@ -730,7 +732,6 @@ if cal.get("dateClick"):
             d_obj = dt_utc.astimezone(pytz.timezone('Asia/Taipei')).date()
         else: d_obj = datetime.datetime.strptime(clicked, "%Y-%m-%d").date()
         
-        # 只顯示公告視窗，不更新 selected_calendar_date
         if st.session_state['user']: show_notice_dialog(default_date=d_obj)
     except: pass
 
@@ -738,11 +739,11 @@ if cal.get("eventClick"):
     if st.session_state['user']:
         show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 (即時同步) ---
+# --- 6. 智慧點名系統 ---
 st.divider()
 st.subheader("📋 每日點名")
 
-# 決定顯示日期
+# 決定日期
 if 'selected_calendar_date' in st.session_state:
     selected_date = st.session_state['selected_calendar_date']
 else:
