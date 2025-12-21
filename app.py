@@ -10,25 +10,10 @@ import pytz
 import pandas as pd
 import uuid
 import calendar as py_calendar
+from collections import defaultdict # 用於整理日期
 
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
-
-# ★ CSS 優化：強制讓 7 欄在手機上並排，不堆疊，並讓標題字體縮小以防跑版
-st.markdown("""
-<style>
-    /* 強制縮小欄位間距 */
-    [data-testid="column"] {
-        padding: 0px !important;
-        min-width: 0px !important;
-    }
-    /* 針對工讀生排班的 checkbox 做緊湊處理 */
-    div[data-testid="stCheckbox"] label {
-        min-height: 0px;
-        padding-bottom: 0px;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 if 'user' not in st.session_state:
     st.session_state['user'] = None
@@ -157,10 +142,12 @@ def get_all_events_cached():
                 course = data.get("title", "課程")
                 title_text = f"{course} ({teacher})"
                 color = "#28a745"
+                
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
                 title_text = f"{staff_name}"
                 color = "#6f42c1"
+                
             elif data.get("type") == "notice":
                 category = data.get("category", "其他")
                 title_text = f"[{category}] {title_text}"
@@ -329,7 +316,6 @@ def show_notice_dialog(default_date=None):
     if default_date is None:
         default_date = datetime.date.today()
     st.info(f"正在建立 **{default_date}** 的事項")
-    
     edit_date = st.date_input("日期", default_date)
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "任務", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
@@ -441,7 +427,7 @@ def show_admin_dialog():
 
     with tab2:
         st.subheader("👷 工讀生排班系統")
-        st.caption("請選擇工讀生與月份，然後勾選上班日期。")
+        st.caption("請選擇工讀生與月份，勾選後按確認。")
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
@@ -455,31 +441,44 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        num_days = py_calendar.monthrange(pt_year, pt_month)[1]
-        cols = st.columns(7)
-        weekdays = ["日", "一", "二", "三", "四", "五", "六"] # 星期日開始
-        for idx, w in enumerate(weekdays):
-            cols[idx].write(f"**{w}**")
-            
-        selected_dates = []
-        first_day_weekday_raw = datetime.date(pt_year, pt_month, 1).weekday()
-        first_day_col_idx = (first_day_weekday_raw + 1) % 7
+        # ★ 重新設計排班介面：以「星期」為橫列 (Transposed Layout)
+        # 目標：日 1 8 15 22 29 (在同一行)
         
-        cols = st.columns(7)
-        col_idx = first_day_col_idx 
+        # 1. 整理該月所有日期，歸類到星期 0-6
+        num_days = py_calendar.monthrange(pt_year, pt_month)[1]
+        
+        # 使用 dict 存放每個星期的日期物件: {6: [dt1, dt8...], 0: [dt2, dt9...]}
+        week_map = defaultdict(list)
         
         for day in range(1, num_days + 1):
             curr_date = datetime.date(pt_year, pt_month, day)
-            # ★ 關鍵：移除中文，保留純數字，配合 CSS 強制不換行
-            day_label = f"{day}"
-            with cols[col_idx]:
-                if st.checkbox(day_label, key=f"pt_day_{day}"):
-                    selected_dates.append(curr_date)
-            col_idx += 1
-            if col_idx > 6:
-                col_idx = 0
-                cols = st.columns(7)
-                
+            wk_idx = curr_date.weekday() # 0=Mon, 6=Sun
+            week_map[wk_idx].append(curr_date)
+            
+        # 2. 顯示順序：日 -> 六
+        display_order = [6, 0, 1, 2, 3, 4, 5] # Sun, Mon, Tue...
+        display_names = ["日", "一", "二", "三", "四", "五", "六"]
+        
+        selected_dates = []
+        
+        # 3. 繪製每一行 (Row)
+        for i, wk_idx in enumerate(display_order):
+            dates = week_map[wk_idx]
+            
+            # 使用 columns：第1欄顯示星期，後面顯示日期
+            # 比例：標題佔 0.5，後面日期均分
+            # 注意：一個月最多有 5 個同一星期幾的日子 (例如 5 個星期日)
+            cols = st.columns([0.5, 1, 1, 1, 1, 1])
+            
+            # 標題
+            cols[0].markdown(f"**{display_names[i]}**")
+            
+            # 填入日期
+            for j, date_obj in enumerate(dates):
+                with cols[j+1]:
+                    if st.checkbox(f"{date_obj.day}", key=f"pt_d_{date_obj.day}"):
+                        selected_dates.append(date_obj)
+                        
         st.divider()
         if st.button(f"確認排入 {len(selected_dates)} 個班次", type="primary", key="save_pt"):
             if not selected_dates:
@@ -584,7 +583,6 @@ def show_admin_dialog():
             with st.form("manual_student"):
                 ms_name = st.text_input("姓名 (必填)")
                 c1, c2 = st.columns(2)
-                # ★ Selectbox for Grade
                 ms_grade = c1.selectbox("年級 (必填)", GRADE_OPTIONS)
                 course_opts = get_unique_course_names()
                 ms_class = c2.selectbox("班別 (必填)", course_opts)
@@ -724,7 +722,7 @@ def calendar_component():
         "initialView": "listMonth",
         "height": "650px",
         "locale": "zh-tw",
-        "titleFormat": {"year": "2-digit", "month": "short"}, # ★ 修正標題格式
+        "titleFormat": {"year": "2-digit", "month": "numeric"},
         "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
         "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
         "views": {
