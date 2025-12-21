@@ -15,37 +15,25 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# CSS 優化
+# CSS 優化：只保留最關鍵的防換行設定，移除會破壞版面的 flex
 st.markdown("""
 <style>
-    /* 強制標題列 7 欄並排 */
+    /* 讓欄位最小寬度為 0，防止被強制換行，但不強制 flex 比例，以免影響登入框 */
     [data-testid="column"] {
         min-width: 0px !important;
-        flex: 1 1 0% !important;
         padding: 0px !important;
-        overflow-wrap: break-word; 
-        text-align: center;
     }
-    /* 讓星期標題更緊湊 */
-    div[data-testid="stMarkdownContainer"] p {
-        font-size: 0.9rem;
-        font-weight: bold;
-        margin-bottom: 5px;
+    /* 調整 checkbox 樣式 */
+    div[data-testid="stCheckbox"] {
+        padding-top: 5px;
+        min-height: 0px;
+    }
+    div[data-testid="stCheckbox"] label {
+        min-height: 0px;
     }
     /* 縮小多個表格之間的間距 */
     .stDataFrame {
         margin-bottom: -1rem;
-    }
-    /* 調整 checkbox 樣式 */
-    div[data-testid="stCheckbox"] {
-        padding-top: 0px;
-        min-height: 0px;
-        text-align: center;
-    }
-    div[data-testid="stCheckbox"] label {
-        min-height: 0px;
-        padding-bottom: 0px;
-        margin-bottom: 0px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -273,22 +261,34 @@ def log_cleaning(area, user):
 
 # --- 4. 彈出視窗 UI ---
 
+# ★ 修正：改用 st.form 確保登入穩定
 @st.dialog("👤 人員登入")
 def show_login_dialog():
-    user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
-    password = st.text_input("請輸入密碼", type="password")
-    if st.button("登入", use_container_width=True):
-        if user == "請選擇": st.error("請選擇身份"); return
-        is_valid = False; is_admin = False
-        if user in ADMINS:
-            if password == ADMIN_PASSWORD: is_valid = True; is_admin = True
-        else:
-            if password == STAFF_PASSWORD: is_valid = True
-        if is_valid:
-            st.session_state['user'] = user
-            st.session_state['is_admin'] = is_admin
-            st.rerun()
-        else: st.error("密碼錯誤")
+    with st.form("login_form"):
+        user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
+        password = st.text_input("請輸入密碼", type="password")
+        submitted = st.form_submit_button("登入", use_container_width=True)
+        
+        if submitted:
+            if user == "請選擇": 
+                st.error("請選擇身份")
+            else:
+                is_valid = False
+                is_admin = False
+                if user in ADMINS:
+                    if password == ADMIN_PASSWORD:
+                        is_valid = True
+                        is_admin = True
+                else:
+                    if password == STAFF_PASSWORD:
+                        is_valid = True
+                
+                if is_valid:
+                    st.session_state['user'] = user
+                    st.session_state['is_admin'] = is_admin
+                    st.rerun()
+                else:
+                    st.error("密碼錯誤")
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
@@ -349,6 +349,15 @@ def show_notice_dialog(default_date=None):
         end_dt = datetime.datetime.combine(edit_date, datetime.time(10,0))
         add_event_to_db(notice_content, start_dt, end_dt, "notice", st.session_state['user'], category=category)
         st.toast("公告已發布")
+        st.rerun()
+
+# ★ 新增：回顧點名表
+@st.dialog("📅 回顧點名紀錄")
+def show_roll_call_review_dialog():
+    st.info("請選擇要查看或補點名的日期")
+    pick_date = st.date_input("選擇日期", value=datetime.date.today())
+    if st.button("確認前往", type="primary", use_container_width=True):
+        st.session_state['selected_calendar_date'] = pick_date
         st.rerun()
 
 @st.dialog("🎓 確認年度升級")
@@ -493,7 +502,6 @@ def show_admin_dialog():
                 st.session_state['preview_schedule'] = None
                 st.rerun()
 
-    # ★ 核心修正：分週次表格，模擬月曆網格，確保手機不跑版
     with tab2:
         st.subheader("👷 工讀生排班系統")
         st.caption("請選擇工讀生與月份，然後直接在表格中勾選。")
@@ -523,21 +531,17 @@ def show_admin_dialog():
         weeks = []
         current_week = []
         
-        # 1. 補第一週前面的空白
-        first_day_weekday = all_dates[0].weekday() # Python: 0=Mon, 6=Sun
-        # 我們需要 Sun=0, Mon=1... -> (6+1)%7=0
+        first_day_weekday = all_dates[0].weekday() 
         start_padding = (first_day_weekday + 1) % 7
         for _ in range(start_padding):
             current_week.append(None)
             
-        # 2. 填入日期
         for d in all_dates:
             current_week.append(d)
             if len(current_week) == 7:
                 weeks.append(current_week)
                 current_week = []
         
-        # 3. 補最後一週後面的空白
         if current_week:
             while len(current_week) < 7:
                 current_week.append(None)
@@ -545,7 +549,6 @@ def show_admin_dialog():
             
         selected_dates_from_table = []
         
-        # 4. 迴圈產生每週的 Data Editor
         for w_idx, week_dates in enumerate(weeks):
             week_data = {}
             date_map = {} 
@@ -556,18 +559,15 @@ def show_admin_dialog():
             for i, d in enumerate(week_dates):
                 col_key = col_names[i]
                 if d:
-                    # 有日期：標題顯示日期數字，內容為 False
                     col_config[col_key] = st.column_config.CheckboxColumn(label=str(d.day), required=True)
                     row_data[col_key] = False
                     date_map[col_key] = d
                 else:
-                    # 空白日期
                     col_config[col_key] = st.column_config.Column(label=" ", disabled=True)
                     row_data[col_key] = False 
             
             df_week = pd.DataFrame([row_data]) 
             
-            # 顯示表格 (隱藏 index)
             edited_week = st.data_editor(
                 df_week,
                 column_config=col_config,
@@ -576,7 +576,6 @@ def show_admin_dialog():
                 key=f"week_grid_{w_idx}"
             )
             
-            # 收集結果
             for col in edited_week.columns:
                 if col in date_map and edited_week[col][0]:
                     selected_dates_from_table.append(date_map[col])
@@ -599,7 +598,6 @@ def show_admin_dialog():
                 st.rerun()
 
     with tab3:
-        # ★ 恢復「師資薪資設定」功能
         st.subheader("👨‍🏫 師資薪資設定")
         with st.form("add_teacher"):
             c_t1, c_t2 = st.columns([2, 1])
@@ -617,8 +615,6 @@ def show_admin_dialog():
                 st.dataframe(t_list)
 
         st.divider()
-        
-        # 薪資報表
         st.subheader("📊 薪資結算報告")
         col_m1, col_m2 = st.columns(2)
         q_year = col_m1.number_input("年份", value=datetime.date.today().year, key="sal_y")
@@ -699,9 +695,12 @@ for i, area in enumerate(areas):
 st.divider()
 
 if st.session_state['user']:
+    # ★ 改為「點名紀錄」按鈕，移除「新增公告」按鈕
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("➕ 新增公告/交接", type="primary", use_container_width=True): show_notice_dialog()
+        if st.button("📅 點名紀錄", type="primary", use_container_width=True):
+            show_roll_call_review_dialog()
+            
     if st.button("📂 資料管理", type="secondary", use_container_width=True): show_general_management_dialog()
     if st.session_state['is_admin']:
         if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
@@ -720,6 +719,7 @@ calendar_options = {
 }
 cal = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
+# 點擊日期：只跳出新增公告，不連動下方點名
 if cal.get("dateClick"):
     clicked = cal["dateClick"]["date"]
     try:
@@ -729,7 +729,8 @@ if cal.get("dateClick"):
             if dt_utc.tzinfo is None: dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
             d_obj = dt_utc.astimezone(pytz.timezone('Asia/Taipei')).date()
         else: d_obj = datetime.datetime.strptime(clicked, "%Y-%m-%d").date()
-        st.session_state['selected_calendar_date'] = d_obj
+        
+        # 只顯示公告視窗，不更新 selected_calendar_date
         if st.session_state['user']: show_notice_dialog(default_date=d_obj)
     except: pass
 
@@ -741,6 +742,7 @@ if cal.get("eventClick"):
 st.divider()
 st.subheader("📋 每日點名")
 
+# 決定顯示日期
 if 'selected_calendar_date' in st.session_state:
     selected_date = st.session_state['selected_calendar_date']
 else:
