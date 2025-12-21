@@ -14,6 +14,22 @@ import calendar as py_calendar
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
+# ★ CSS 優化：強制讓 7 欄在手機上並排，不堆疊，並讓標題字體縮小以防跑版
+st.markdown("""
+<style>
+    /* 強制縮小欄位間距 */
+    [data-testid="column"] {
+        padding: 0px !important;
+        min-width: 0px !important;
+    }
+    /* 針對工讀生排班的 checkbox 做緊湊處理 */
+    div[data-testid="stCheckbox"] label {
+        min-height: 0px;
+        padding-bottom: 0px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 if 'user' not in st.session_state:
     st.session_state['user'] = None
 if 'is_admin' not in st.session_state:
@@ -56,7 +72,6 @@ for h in range(9, 23):
 # --- 3. 資料庫存取 (快取層) ---
 
 def get_unique_course_names():
-    # ★ 更新預設課程清單，並與資料庫合併
     default_courses = [
         "小四數學", "小五數學", "小六數學",
         "國一數學", "國二數學", "國三數學", "國二理化", "國二自然",
@@ -65,9 +80,7 @@ def get_unique_course_names():
     doc = db.collection("settings").document("courses").get()
     if doc.exists:
         saved_list = doc.to_dict().get("list", [])
-        # 合併並去除重複，然後簡單排序讓它好找一點
         combined = list(set(default_courses + saved_list))
-        # 這裡做一個簡單的自訂排序邏輯：小->國->高
         def sort_key(x):
             order = ["小", "國", "高"]
             for i, prefix in enumerate(order):
@@ -457,7 +470,8 @@ def show_admin_dialog():
         
         for day in range(1, num_days + 1):
             curr_date = datetime.date(pt_year, pt_month, day)
-            day_label = f"{day} ({weekdays[col_idx]})"
+            # ★ 關鍵：移除中文，保留純數字，配合 CSS 強制不換行
+            day_label = f"{day}"
             with cols[col_idx]:
                 if st.checkbox(day_label, key=f"pt_day_{day}"):
                     selected_dates.append(curr_date)
@@ -570,9 +584,8 @@ def show_admin_dialog():
             with st.form("manual_student"):
                 ms_name = st.text_input("姓名 (必填)")
                 c1, c2 = st.columns(2)
-                # ★ 年級欄位升級：改為 Selectbox，並使用 GRADE_OPTIONS
+                # ★ Selectbox for Grade
                 ms_grade = c1.selectbox("年級 (必填)", GRADE_OPTIONS)
-                
                 course_opts = get_unique_course_names()
                 ms_class = c2.selectbox("班別 (必填)", course_opts)
                 c3, c4 = st.columns(2)
@@ -711,7 +724,7 @@ def calendar_component():
         "initialView": "listMonth",
         "height": "650px",
         "locale": "zh-tw",
-        "titleFormat": {"year": "numeric", "month": "long"},
+        "titleFormat": {"year": "2-digit", "month": "short"}, # ★ 修正標題格式
         "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
         "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
         "views": {
@@ -754,7 +767,6 @@ st.info(f"日期：**{selected_date}**")
 
 daily_courses = []
 s_date_str = selected_date.isoformat()
-# 注意：這裡要重新讀取一次事件
 all_events_main = get_all_events_cached()
 
 for e in all_events_main:
