@@ -313,6 +313,7 @@ def show_notice_dialog(default_date=None):
     if default_date is None:
         default_date = datetime.date.today()
     st.info(f"正在建立 **{default_date}** 的事項")
+    
     edit_date = st.date_input("日期", default_date)
     category = st.selectbox("分類 (必選)", ["調課", "考試", "活動", "任務", "其他"])
     notice_content = st.text_area("事項內容", placeholder="請輸入詳細內容...")
@@ -438,69 +439,54 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        # ★ 革命性改版：使用 st.data_editor (可滑動表格)
-        # 這能完美解決手機跑版問題，並提供直覺的勾選介面
-        
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         weekdays_map = ["一", "二", "三", "四", "五", "六", "日"]
         
-        # 1. 建立資料表數據
         schedule_data = []
         for day in range(1, num_days + 1):
             curr_date = datetime.date(pt_year, pt_month, day)
             wk_str = weekdays_map[curr_date.weekday()]
-            # 格式： 12/01 (日)
             display_date = f"{pt_month:02d}/{day:02d} ({wk_str})"
             schedule_data.append({
                 "日期": display_date,
                 "排班": False,
-                "raw_date": curr_date # 隱藏欄位，用於後續處理
+                "raw_date": curr_date 
             })
             
         df_schedule = pd.DataFrame(schedule_data)
         
-        # 2. 顯示編輯器
-        # column_config 設定 "排班" 為 Checkbox，並隱藏 raw_date
         edited_df = st.data_editor(
             df_schedule,
             column_config={
                 "日期": st.column_config.TextColumn("日期", disabled=True),
                 "排班": st.column_config.CheckboxColumn("排班", required=True),
-                "raw_date": None # 隱藏
+                "raw_date": None 
             },
             hide_index=True,
             use_container_width=True,
-            height=400 # 固定高度，內部可捲動
+            height=400 
         )
         
         st.divider()
         
-        # 3. 處理提交
         if st.button("確認排入選取班次", type="primary", key="save_pt_table"):
-            # 篩選出被勾選的列
             selected_rows = edited_df[edited_df["排班"] == True]
-            
             if selected_rows.empty:
                 st.error("未勾選任何日期")
             else:
                 t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
                 t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
                 count = 0
-                
                 for index, row in selected_rows.iterrows():
-                    # 從 dataframe 取回原始日期物件
-                    # 注意：pandas 讀出來可能是 Timestamp，要轉回 date
                     raw_d = row["raw_date"]
                     if isinstance(raw_d, pd.Timestamp):
                         date_obj = raw_d.date()
                     else:
                         date_obj = raw_d
-                        
                     start_dt = datetime.datetime.combine(date_obj, t_s)
                     end_dt = datetime.datetime.combine(date_obj, t_e)
                     add_event_to_db("工讀", start_dt, end_dt, "part_time", st.session_state['user'], staff=pt_name)
                     count += 1
-                    
                 st.success(f"成功新增 {count} 筆工讀班表！")
                 st.rerun()
 
@@ -714,10 +700,15 @@ if st.session_state['user']:
     with c_act1:
         if st.button("➕ 新增公告/交接", type="primary", use_container_width=True):
             show_notice_dialog() 
+            
+    # ★ 新增：所有人可見的資料管理按鈕
+    if st.button("📂 資料管理", type="secondary", use_container_width=True):
+        show_general_management_dialog()
+        
     if st.session_state['is_admin']:
         if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
 
-# --- 使用 @st.fragment 封裝行事曆 ---
+# 使用 @st.fragment 封裝行事曆
 @st.fragment
 def calendar_component():
     all_events = get_all_events_cached()
@@ -743,15 +734,34 @@ def calendar_component():
 
     cal_return = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
+    # ★ 修正後的日期解析邏輯
     if cal_return.get("dateClick"):
         clicked_date_str = cal_return["dateClick"]["date"]
-        clean_date_str = clicked_date_str[:10]
         try:
-            date_obj = datetime.datetime.strptime(clean_date_str, "%Y-%m-%d").date()
+            # 判斷是否為 ISO 格式 (例如 2025-12-20T16:00:00.000Z)
+            if "T" in clicked_date_str:
+                if clicked_date_str.endswith("Z"):
+                    iso_str = clicked_date_str.replace("Z", "+00:00")
+                else:
+                    iso_str = clicked_date_str
+                
+                # 轉成 datetime 物件
+                dt_utc = datetime.datetime.fromisoformat(iso_str)
+                
+                # 如果沒有時區，假設為 UTC (這是 FullCalendar 的預設行為)
+                if dt_utc.tzinfo is None:
+                    dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
+                
+                # 轉換為台灣時間 (Asia/Taipei)
+                tz_taipei = pytz.timezone('Asia/Taipei')
+                date_obj = dt_utc.astimezone(tz_taipei).date()
+            else:
+                # 純日期格式 YYYY-MM-DD
+                date_obj = datetime.datetime.strptime(clicked_date_str, "%Y-%m-%d").date()
+                
             if st.session_state['user']:
                 show_notice_dialog(default_date=date_obj)
-            else:
-                st.toast("請先登入才能新增事項", icon="🔒")
+                
         except ValueError:
             st.error(f"日期解析錯誤：{clicked_date_str}")
 
