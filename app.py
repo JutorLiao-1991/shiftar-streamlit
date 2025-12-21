@@ -15,7 +15,7 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# CSS 優化：只保留最關鍵的防換行設定
+# CSS 優化
 st.markdown("""
 <style>
     /* 讓欄位最小寬度為 0，防止被強制換行 */
@@ -32,9 +32,14 @@ st.markdown("""
     div[data-testid="stCheckbox"] label {
         min-height: 0px;
     }
-    /* 縮小多個表格之間的間距，讓它看起來像一個大月曆 */
+    /* 縮小表格間距 */
     .stDataFrame {
         margin-bottom: -1rem;
+    }
+    /* 讓星期標題置中 */
+    div[data-testid="stMarkdownContainer"] p {
+        text-align: center;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -261,42 +266,6 @@ def log_cleaning(area, user):
     st.toast(f"✨ {area} 清潔完成！", icon="🧹")
 
 # --- 4. 彈出視窗 UI ---
-
-# ★ 修正核心：使用 callback 進行登入驗證，確保穩定性
-def login_callback():
-    user = st.session_state.get('login_user')
-    password = st.session_state.get('login_pwd')
-    
-    if user == "請選擇":
-        st.session_state['login_error'] = "請選擇身份"
-    else:
-        is_valid = False
-        is_admin = False
-        
-        if user in ADMINS:
-            if password == ADMIN_PASSWORD:
-                is_valid = True
-                is_admin = True
-        else:
-            if password == STAFF_PASSWORD:
-                is_valid = True
-        
-        if is_valid:
-            st.session_state['user'] = user
-            st.session_state['is_admin'] = is_admin
-            if 'login_error' in st.session_state: del st.session_state['login_error']
-        else:
-            st.session_state['login_error'] = "密碼錯誤"
-
-@st.dialog("👤 人員登入")
-def show_login_dialog():
-    st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST, key='login_user')
-    st.text_input("請輸入密碼", type="password", key='login_pwd')
-    
-    if 'login_error' in st.session_state:
-        st.error(st.session_state['login_error'])
-        
-    st.button("登入", on_click=login_callback, use_container_width=True)
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
@@ -558,26 +527,22 @@ def show_admin_dialog():
         
         # 迴圈產生每週的 Data Editor
         for w_idx, week_dates in enumerate(weeks):
-            week_data = {}
-            date_map = {} 
             col_names = [f"c{i}" for i in range(7)]
             row_data = {}
             col_config = {}
+            date_map = {}
             
             for i, d in enumerate(week_dates):
                 col_key = col_names[i]
                 if d:
-                    # 有日期：標題顯示日期數字，內容為 False
                     col_config[col_key] = st.column_config.CheckboxColumn(label=str(d.day), required=True)
                     row_data[col_key] = False
                     date_map[col_key] = d
                 else:
-                    # 空白日期
                     col_config[col_key] = st.column_config.Column(label=" ", disabled=True)
                     row_data[col_key] = False 
             
             df_week = pd.DataFrame([row_data]) 
-            
             edited_week = st.data_editor(
                 df_week,
                 column_config=col_config,
@@ -661,22 +626,51 @@ def show_admin_dialog():
                 batch_delete_events([event_map[l] for l in selected_labels])
                 st.rerun()
 
-# --- 5. 主介面邏輯 ---
+# --- 5. 主介面邏輯 (★ 修改重點：登入邏輯移至首頁，不使用 Dialog) ---
 
 tz = pytz.timezone('Asia/Taipei')
 now = datetime.datetime.now(tz)
+# 凌晨自動登出
 if 1 <= now.hour < 5 and st.session_state['user'] is not None:
     st.session_state['user'] = None; st.session_state['is_admin'] = False; st.rerun()
 
+# ★ 如果未登入，顯示登入區塊並停止執行後續程式碼
+if st.session_state['user'] is None:
+    st.title("🏫 鳩特數理行政班表")
+    st.info("請先登入以使用系統")
+    
+    with st.form("main_login_form"):
+        user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
+        password = st.text_input("請輸入密碼", type="password")
+        if st.form_submit_button("登入", use_container_width=True):
+            if user == "請選擇":
+                st.error("請選擇身份")
+            else:
+                is_valid = False
+                is_admin = False
+                if user in ADMINS:
+                    if password == ADMIN_PASSWORD:
+                        is_valid = True
+                        is_admin = True
+                else:
+                    if password == STAFF_PASSWORD:
+                        is_valid = True
+                
+                if is_valid:
+                    st.session_state['user'] = user
+                    st.session_state['is_admin'] = is_admin
+                    st.rerun()
+                else:
+                    st.error("密碼錯誤")
+    st.stop() # 停止執行，確保畫面乾淨
+
+# 登入後顯示的內容
 col_title, col_login = st.columns([3, 1], vertical_alignment="center")
 with col_title: st.title("🏫 鳩特數理行政班表")
 with col_login:
-    if st.session_state['user']:
-        st.markdown(f"👤 **{st.session_state['user']}**")
-        if st.button("登出", type="secondary", use_container_width=True):
-            st.session_state['user'] = None; st.session_state['is_admin'] = False; st.rerun()
-    else:
-        if st.button("登入", type="primary", use_container_width=True): show_login_dialog()
+    st.markdown(f"👤 **{st.session_state['user']}**")
+    if st.button("登出", type="secondary", use_container_width=True):
+        st.session_state['user'] = None; st.session_state['is_admin'] = False; st.rerun()
 
 st.divider()
 
@@ -699,21 +693,18 @@ for i, area in enumerate(areas):
         st.markdown(f"### :{color}[{days_diff}]")
         st.caption(f"最後打掃：{last_cleaner}")
         if st.button("已清潔", key=f"clean_{i}", use_container_width=True):
-            if st.session_state['user']: log_cleaning(area, st.session_state['user']); st.rerun()
-            else: st.error("請先登入")
+            log_cleaning(area, st.session_state['user']); st.rerun()
 
 st.divider()
 
-if st.session_state['user']:
-    c1, c2 = st.columns([1, 4])
-    with c1:
-        # ★ 回顧點名按鈕
-        if st.button("📅 回顧點名表", type="primary", use_container_width=True):
-            show_roll_call_review_dialog()
-            
-    if st.button("📂 資料管理", type="secondary", use_container_width=True): show_general_management_dialog()
-    if st.session_state['is_admin']:
-        if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
+c1, c2 = st.columns([1, 4])
+with c1:
+    if st.button("📅 回顧點名表", type="primary", use_container_width=True):
+        show_roll_call_review_dialog()
+        
+if st.button("📂 資料管理", type="secondary", use_container_width=True): show_general_management_dialog()
+if st.session_state['is_admin']:
+    if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
 
 all_events = get_all_events_cached()
 calendar_options = {
@@ -740,14 +731,13 @@ if cal.get("dateClick"):
             d_obj = dt_utc.astimezone(pytz.timezone('Asia/Taipei')).date()
         else: d_obj = datetime.datetime.strptime(clicked, "%Y-%m-%d").date()
         
-        if st.session_state['user']: show_notice_dialog(default_date=d_obj)
+        show_notice_dialog(default_date=d_obj)
     except: pass
 
 if cal.get("eventClick"):
-    if st.session_state['user']:
-        show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
+    show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 ---
+# --- 6. 智慧點名系統 (即時同步) ---
 st.divider()
 st.subheader("📋 每日點名")
 
@@ -789,31 +779,28 @@ def update_status_and_save(student_name, from_list, to_list):
     save_roll_call_to_db(date_key, save_data)
     st.rerun()
 
-if st.session_state['user']:
-    if not current_data['absent'] and not current_data['present'] and not current_data['leave']:
-        st.info("無須點名")
-    else:
-        if st.button("🔄 刷新數據 (同步最新狀態)", use_container_width=True): st.rerun()
-        with st.expander("點名表單", expanded=True):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown("### 🔴 未到")
-                if current_data['absent']:
-                    cols = st.columns(4)
-                    for i, s in enumerate(current_data['absent']):
-                        if cols[i%4].button(s, key=f"ab_{s}_{date_key}"):
-                            update_status_and_save(s, "absent", "present")
-            with c2:
-                st.markdown("### 🟢 已到")
-                for s in current_data['present']:
-                    if st.button(f"✅ {s}", key=f"pr_{s}_{date_key}", type="primary", use_container_width=True):
-                        update_status_and_save(s, "present", "absent")
-            with c3:
-                st.markdown("### 🟡 請假")
-                val = st.selectbox("請假", ["選擇..."] + current_data['absent'], key=f"lv_{date_key}")
-                if val != "選擇...": update_status_and_save(val, "absent", "leave")
-                for s in current_data['leave']:
-                    if st.button(f"🤒 {s}", key=f"le_{s}_{date_key}", use_container_width=True):
-                        update_status_and_save(s, "leave", "absent")
+if not current_data['absent'] and not current_data['present'] and not current_data['leave']:
+    st.info("無須點名")
 else:
-    st.warning("請登入以進行點名")
+    if st.button("🔄 刷新數據 (同步最新狀態)", use_container_width=True): st.rerun()
+    with st.expander("點名表單", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("### 🔴 未到")
+            if current_data['absent']:
+                cols = st.columns(4)
+                for i, s in enumerate(current_data['absent']):
+                    if cols[i%4].button(s, key=f"ab_{s}_{date_key}"):
+                        update_status_and_save(s, "absent", "present")
+        with c2:
+            st.markdown("### 🟢 已到")
+            for s in current_data['present']:
+                if st.button(f"✅ {s}", key=f"pr_{s}_{date_key}", type="primary", use_container_width=True):
+                    update_status_and_save(s, "present", "absent")
+        with c3:
+            st.markdown("### 🟡 請假")
+            val = st.selectbox("請假", ["選擇..."] + current_data['absent'], key=f"lv_{date_key}")
+            if val != "選擇...": update_status_and_save(val, "absent", "leave")
+            for s in current_data['leave']:
+                if st.button(f"🤒 {s}", key=f"le_{s}_{date_key}", use_container_width=True):
+                    update_status_and_save(s, "leave", "absent")
