@@ -15,15 +15,35 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# CSS 優化
+# ★ CSS 優化：暴力強制 7 欄在手機上不換行，並優化格子顯示
 st.markdown("""
 <style>
+    /* 強制 7 欄並排，不準換行 */
     [data-testid="column"] {
         min-width: 0px !important;
+        flex: 1 1 0% !important;
         padding: 0px !important;
+        overflow-wrap: break-word; 
     }
+    /* 調整 checkbox 樣式，讓它盡量緊湊 */
     div[data-testid="stCheckbox"] {
-        padding-top: 5px;
+        padding-top: 0px;
+        min-height: 0px;
+        text-align: center;
+    }
+    div[data-testid="stCheckbox"] label {
+        min-height: 0px;
+        padding-bottom: 0px;
+        margin-bottom: 0px;
+    }
+    /* 讓星期標題置中且緊湊 */
+    div[data-testid="stMarkdownContainer"] p {
+        font-size: 0.9rem;
+        margin-bottom: 5px;
+        text-align: center;
+    }
+    div[data-testid="stMarkdownContainer"] {
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -139,7 +159,7 @@ def promote_student_grade(grade_str):
     if g == "畢業": return "畢業"
     return g
 
-# ★ 點名資料庫功能 (無快取，確保即時性)
+# ★ 點名資料庫功能 (即時讀取，不快取)
 def get_roll_call_from_db(date_str):
     doc = db.collection("roll_call_records").document(date_str).get()
     if doc.exists:
@@ -539,52 +559,50 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        # ★ 革命性改版：使用 st.data_editor (表格清單模式)
+        # ★ 回歸 7 欄網格模式 (但加上 CSS 強制不換行)
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
-        weekdays_map = ["一", "二", "三", "四", "五", "六", "日"]
         
-        schedule_data = []
+        # 標題列：日 一 二 ... 六
+        cols = st.columns(7)
+        weekdays = ["日", "一", "二", "三", "四", "五", "六"] # 星期日開始
+        for idx, w in enumerate(weekdays):
+            cols[idx].markdown(f"**{w}**")
+            
+        selected_dates = []
+        
+        # 計算 1 號是星期幾 (Python 預設 Mon=0...Sun=6)
+        # 我們需要 Sun=0...Sat=6
+        # 如果是 6 (Sun) -> 0, 0(Mon)->1
+        first_day_weekday_raw = datetime.date(pt_year, pt_month, 1).weekday()
+        first_day_col_idx = (first_day_weekday_raw + 1) % 7
+        
+        cols = st.columns(7)
+        col_idx = first_day_col_idx 
+        
+        # 填入日期
         for day in range(1, num_days + 1):
             curr_date = datetime.date(pt_year, pt_month, day)
-            wk_str = weekdays_map[curr_date.weekday()]
-            display_date = f"{pt_month:02d}/{day:02d} ({wk_str})"
-            schedule_data.append({
-                "日期": display_date,
-                "排班": False,
-                "raw_date": curr_date
-            })
             
-        df_schedule = pd.DataFrame(schedule_data)
-        
-        # 顯示 Data Editor
-        edited_df = st.data_editor(
-            df_schedule,
-            column_config={
-                "日期": st.column_config.TextColumn("日期", disabled=True),
-                "排班": st.column_config.CheckboxColumn("排班", required=True),
-                "raw_date": None 
-            },
-            hide_index=True,
-            use_container_width=True,
-            height=400 
-        )
+            with cols[col_idx]:
+                # 只顯示數字，checkbox 本身不帶 label
+                if st.checkbox(f"{day}", key=f"pt_day_{day}"):
+                    selected_dates.append(curr_date)
+            
+            col_idx += 1
+            if col_idx > 6:
+                col_idx = 0
+                cols = st.columns(7) # 換行
         
         st.divider()
         
-        if st.button("確認排入選取班次", type="primary", key="save_pt_table"):
-            selected_rows = edited_df[edited_df["排班"] == True]
-            if selected_rows.empty:
+        if st.button(f"確認排入 {len(selected_dates)} 個班次", type="primary", key="save_pt_table"):
+            if not selected_dates:
                 st.error("未勾選任何日期")
             else:
                 t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
                 t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
                 count = 0
-                for index, row in selected_rows.iterrows():
-                    raw_d = row["raw_date"]
-                    if isinstance(raw_d, pd.Timestamp):
-                        date_obj = raw_d.date()
-                    else:
-                        date_obj = raw_d
+                for date_obj in selected_dates:
                     start_dt = datetime.datetime.combine(date_obj, t_s)
                     end_dt = datetime.datetime.combine(date_obj, t_e)
                     add_event_to_db("工讀", start_dt, end_dt, "part_time", st.session_state['user'], staff=pt_name)
