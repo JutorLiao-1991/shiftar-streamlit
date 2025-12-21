@@ -15,7 +15,7 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# CSS 優化：只保留最關鍵的防換行設定，移除可能導致卡住的樣式
+# CSS 優化：只保留最關鍵的防換行設定
 st.markdown("""
 <style>
     /* 讓欄位最小寬度為 0，防止被強制換行 */
@@ -32,14 +32,9 @@ st.markdown("""
     div[data-testid="stCheckbox"] label {
         min-height: 0px;
     }
-    /* 縮小多個表格之間的間距 */
+    /* 縮小多個表格之間的間距，讓它看起來像一個大月曆 */
     .stDataFrame {
         margin-bottom: -1rem;
-    }
-    /* 讓星期標題置中 */
-    div[data-testid="stMarkdownContainer"] p {
-        text-align: center;
-        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -267,32 +262,41 @@ def log_cleaning(area, user):
 
 # --- 4. 彈出視窗 UI ---
 
-# ★ 修正：移除 st.form，改回直接按鈕觸發，確保手機登入正常
+# ★ 修正核心：使用 callback 進行登入驗證，確保穩定性
+def login_callback():
+    user = st.session_state.get('login_user')
+    password = st.session_state.get('login_pwd')
+    
+    if user == "請選擇":
+        st.session_state['login_error'] = "請選擇身份"
+    else:
+        is_valid = False
+        is_admin = False
+        
+        if user in ADMINS:
+            if password == ADMIN_PASSWORD:
+                is_valid = True
+                is_admin = True
+        else:
+            if password == STAFF_PASSWORD:
+                is_valid = True
+        
+        if is_valid:
+            st.session_state['user'] = user
+            st.session_state['is_admin'] = is_admin
+            if 'login_error' in st.session_state: del st.session_state['login_error']
+        else:
+            st.session_state['login_error'] = "密碼錯誤"
+
 @st.dialog("👤 人員登入")
 def show_login_dialog():
-    user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
-    password = st.text_input("請輸入密碼", type="password")
+    st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST, key='login_user')
+    st.text_input("請輸入密碼", type="password", key='login_pwd')
     
-    if st.button("登入", use_container_width=True):
-        if user == "請選擇": 
-            st.error("請選擇身份")
-        else:
-            is_valid = False
-            is_admin = False
-            if user in ADMINS:
-                if password == ADMIN_PASSWORD:
-                    is_valid = True
-                    is_admin = True
-            else:
-                if password == STAFF_PASSWORD:
-                    is_valid = True
-            
-            if is_valid:
-                st.session_state['user'] = user
-                st.session_state['is_admin'] = is_admin
-                st.rerun()
-            else:
-                st.error("密碼錯誤")
+    if 'login_error' in st.session_state:
+        st.error(st.session_state['login_error'])
+        
+    st.button("登入", on_click=login_callback, use_container_width=True)
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
@@ -552,24 +556,28 @@ def show_admin_dialog():
             
         selected_dates_from_table = []
         
-        # 產生表格
+        # 迴圈產生每週的 Data Editor
         for w_idx, week_dates in enumerate(weeks):
+            week_data = {}
+            date_map = {} 
             col_names = [f"c{i}" for i in range(7)]
             row_data = {}
             col_config = {}
-            date_map = {}
             
             for i, d in enumerate(week_dates):
                 col_key = col_names[i]
                 if d:
+                    # 有日期：標題顯示日期數字，內容為 False
                     col_config[col_key] = st.column_config.CheckboxColumn(label=str(d.day), required=True)
                     row_data[col_key] = False
                     date_map[col_key] = d
                 else:
+                    # 空白日期
                     col_config[col_key] = st.column_config.Column(label=" ", disabled=True)
                     row_data[col_key] = False 
             
             df_week = pd.DataFrame([row_data]) 
+            
             edited_week = st.data_editor(
                 df_week,
                 column_config=col_config,
