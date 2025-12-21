@@ -25,9 +25,6 @@ st.markdown("""
     div[data-testid="stCheckbox"] {
         padding-top: 5px;
     }
-    div[data-testid="stCheckbox"] label {
-        min-height: 0px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -369,6 +366,7 @@ def show_promotion_confirm_dialog():
         st.success(f"成功升級 {promoted_count} 位學生！")
         st.rerun()
 
+# ★ 新增：權限下放，所有員工可用的資料管理
 @st.dialog("📂 資料管理")
 def show_general_management_dialog():
     tab1, tab2 = st.tabs(["🎓 學生名單", "👷 工讀生名單"])
@@ -527,7 +525,7 @@ def show_admin_dialog():
 
     with tab2:
         st.subheader("👷 工讀生排班系統")
-        st.caption("請選擇工讀生與月份，直接在下方表格勾選排班。")
+        st.caption("請選擇工讀生與月份，然後直接在表格中勾選。")
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
@@ -541,6 +539,7 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
+        # ★ 革命性改版：使用 st.data_editor (表格清單模式)
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         weekdays_map = ["一", "二", "三", "四", "五", "六", "日"]
         
@@ -552,11 +551,12 @@ def show_admin_dialog():
             schedule_data.append({
                 "日期": display_date,
                 "排班": False,
-                "raw_date": curr_date 
+                "raw_date": curr_date
             })
             
         df_schedule = pd.DataFrame(schedule_data)
         
+        # 顯示 Data Editor
         edited_df = st.data_editor(
             df_schedule,
             column_config={
@@ -625,6 +625,17 @@ def show_admin_dialog():
                 st.info("無紀錄")
 
     with tab4:
+        st.subheader("👨‍🏫 師資薪資")
+        with st.form("add_teacher"):
+            c_t1, c_t2 = st.columns([2, 1])
+            new_t_name = c_t1.text_input("老師姓名")
+            new_t_rate = c_t2.number_input("單價", min_value=0, step=100)
+            if st.form_submit_button("更新"):
+                if new_t_name:
+                    save_teacher_data(new_t_name, new_t_rate)
+                    st.rerun()
+        
+    with tab5:
         st.subheader("🗑️ 資料庫強制管理 (批次刪除)")
         st.caption("請小心使用，刪除後無法復原。")
         all_docs = db.collection("shifts").order_by("start", direction=firestore.Query.DESCENDING).stream()
@@ -754,7 +765,6 @@ cal_return = calendar(events=all_events, options=calendar_options, callbacks=['d
 if cal_return.get("dateClick"):
     clicked_date_str = cal_return["dateClick"]["date"]
     try:
-        # ★ 修正日期偏移 bug
         if "T" in clicked_date_str:
              if clicked_date_str.endswith("Z"):
                  clicked_date_str = clicked_date_str.replace("Z", "+00:00")
