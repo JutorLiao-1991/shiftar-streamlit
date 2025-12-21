@@ -15,7 +15,7 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# CSS 優化：強制標題列不換行，並調整表格間距
+# CSS 優化
 st.markdown("""
 <style>
     /* 強制標題列 7 欄並排 */
@@ -32,9 +32,20 @@ st.markdown("""
         font-weight: bold;
         margin-bottom: 5px;
     }
-    /* 縮小多個表格之間的間距，讓它看起來像一個大月曆 */
+    /* 縮小多個表格之間的間距 */
     .stDataFrame {
         margin-bottom: -1rem;
+    }
+    /* 調整 checkbox 樣式 */
+    div[data-testid="stCheckbox"] {
+        padding-top: 0px;
+        min-height: 0px;
+        text-align: center;
+    }
+    div[data-testid="stCheckbox"] label {
+        min-height: 0px;
+        padding-bottom: 0px;
+        margin-bottom: 0px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -512,10 +523,9 @@ def show_admin_dialog():
         weeks = []
         current_week = []
         
-        # 1. 補第一週前面的空白 (如果 1 號不是星期日)
+        # 1. 補第一週前面的空白
         first_day_weekday = all_dates[0].weekday() # Python: 0=Mon, 6=Sun
-        # 我們需要 Sun=0, Mon=1...
-        # 轉換： (6 + 1) % 7 = 0 (Sun)
+        # 我們需要 Sun=0, Mon=1... -> (6+1)%7=0
         start_padding = (first_day_weekday + 1) % 7
         for _ in range(start_padding):
             current_week.append(None)
@@ -538,15 +548,9 @@ def show_admin_dialog():
         # 4. 迴圈產生每週的 Data Editor
         for w_idx, week_dates in enumerate(weeks):
             week_data = {}
-            date_map = {} # column -> date
-            
-            # 欄位名稱用 c0, c1... 以便設定 column_config
+            date_map = {} 
             col_names = [f"c{i}" for i in range(7)]
-            
-            # 準備這一週的資料 row (只有一列: Checkbox True/False)
             row_data = {}
-            
-            # Column Config: 設定欄位標題 (日期數字)
             col_config = {}
             
             for i, d in enumerate(week_dates):
@@ -557,11 +561,11 @@ def show_admin_dialog():
                     row_data[col_key] = False
                     date_map[col_key] = d
                 else:
-                    # 空白日期：標題空白，內容停用
+                    # 空白日期
                     col_config[col_key] = st.column_config.Column(label=" ", disabled=True)
-                    row_data[col_key] = False # 佔位
+                    row_data[col_key] = False 
             
-            df_week = pd.DataFrame([row_data]) # 轉成 DataFrame
+            df_week = pd.DataFrame([row_data]) 
             
             # 顯示表格 (隱藏 index)
             edited_week = st.data_editor(
@@ -595,7 +599,27 @@ def show_admin_dialog():
                 st.rerun()
 
     with tab3:
-        # 薪資 (簡略)
+        # ★ 恢復「師資薪資設定」功能
+        st.subheader("👨‍🏫 師資薪資設定")
+        with st.form("add_teacher"):
+            c_t1, c_t2 = st.columns([2, 1])
+            new_t_name = c_t1.text_input("老師姓名 (輸入現有姓名即為修改)")
+            new_t_rate = c_t2.number_input("單堂薪資", min_value=0, step=50)
+            if st.form_submit_button("新增 / 更新"):
+                if new_t_name:
+                    save_teacher_data(new_t_name, new_t_rate)
+                    st.rerun()
+        
+        teachers_cfg = get_teachers_data()
+        if teachers_cfg:
+            with st.expander("查看目前師資與薪資列表"):
+                t_list = [{"姓名": k, "單價": v.get('rate', 0)} for k, v in teachers_cfg.items()]
+                st.dataframe(t_list)
+
+        st.divider()
+        
+        # 薪資報表
+        st.subheader("📊 薪資結算報告")
         col_m1, col_m2 = st.columns(2)
         q_year = col_m1.number_input("年份", value=datetime.date.today().year, key="sal_y")
         q_month = col_m2.number_input("月份", value=datetime.date.today().month, min_value=1, max_value=12, key="sal_m")
