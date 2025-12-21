@@ -15,37 +15,24 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# CSS 優化
+# CSS 優化：移除過度暴力的 flex 設定，改為溫和的縮排
 st.markdown("""
 <style>
-    /* 強制 7 欄並排 */
+    /* 讓欄位最小寬度為 0，防止被強制換行，但不強制 flex 比例 */
     [data-testid="column"] {
         min-width: 0px !important;
-        flex: 1 1 0% !important;
         padding: 0px !important;
-        overflow-wrap: break-word; 
-        text-align: center;
     }
-    /* 讓星期標題更緊湊 */
-    div[data-testid="stMarkdownContainer"] p {
-        font-size: 0.9rem;
-        font-weight: bold;
-        margin-bottom: 5px;
+    /* 調整 checkbox 樣式 */
+    div[data-testid="stCheckbox"] {
+        padding-top: 5px;
+    }
+    div[data-testid="stCheckbox"] label {
+        min-height: 0px;
     }
     /* 縮小多個表格之間的間距 */
     .stDataFrame {
         margin-bottom: -1rem;
-    }
-    /* 調整 checkbox 樣式 */
-    div[data-testid="stCheckbox"] {
-        padding-top: 0px;
-        min-height: 0px;
-        text-align: center;
-    }
-    div[data-testid="stCheckbox"] label {
-        min-height: 0px;
-        padding-bottom: 0px;
-        margin-bottom: 0px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -273,22 +260,34 @@ def log_cleaning(area, user):
 
 # --- 4. 彈出視窗 UI ---
 
+# ★ 修正：改用 st.form 確保登入穩定
 @st.dialog("👤 人員登入")
 def show_login_dialog():
-    user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
-    password = st.text_input("請輸入密碼", type="password")
-    if st.button("登入", use_container_width=True):
-        if user == "請選擇": st.error("請選擇身份"); return
-        is_valid = False; is_admin = False
-        if user in ADMINS:
-            if password == ADMIN_PASSWORD: is_valid = True; is_admin = True
-        else:
-            if password == STAFF_PASSWORD: is_valid = True
-        if is_valid:
-            st.session_state['user'] = user
-            st.session_state['is_admin'] = is_admin
-            st.rerun()
-        else: st.error("密碼錯誤")
+    with st.form("login_form"):
+        user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
+        password = st.text_input("請輸入密碼", type="password")
+        submitted = st.form_submit_button("登入", use_container_width=True)
+        
+        if submitted:
+            if user == "請選擇": 
+                st.error("請選擇身份")
+            else:
+                is_valid = False
+                is_admin = False
+                if user in ADMINS:
+                    if password == ADMIN_PASSWORD:
+                        is_valid = True
+                        is_admin = True
+                else:
+                    if password == STAFF_PASSWORD:
+                        is_valid = True
+                
+                if is_valid:
+                    st.session_state['user'] = user
+                    st.session_state['is_admin'] = is_admin
+                    st.rerun()
+                else:
+                    st.error("密碼錯誤")
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
@@ -351,7 +350,6 @@ def show_notice_dialog(default_date=None):
         st.toast("公告已發布")
         st.rerun()
 
-# ★ 新增：回顧點名表視窗
 @st.dialog("📅 回顧點名紀錄")
 def show_roll_call_review_dialog():
     st.info("請選擇要查看或補點名的日期")
@@ -518,6 +516,7 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
+        # 標題列：日 一 二 ... 六 (手機 CSS 強制不換行)
         cols = st.columns(7)
         weekdays = ["日", "一", "二", "三", "四", "五", "六"] 
         for idx, w in enumerate(weekdays):
@@ -526,10 +525,12 @@ def show_admin_dialog():
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         all_dates = [datetime.date(pt_year, pt_month, d) for d in range(1, num_days + 1)]
         
+        # 將日期分組為週 (以星期日為一週開始)
         weeks = []
         current_week = []
         
-        first_day_weekday = all_dates[0].weekday() 
+        first_day_weekday = all_dates[0].weekday() # Python: 0=Mon, 6=Sun
+        # 我們需要 Sun=0, Mon=1... -> (6+1)%7=0
         start_padding = (first_day_weekday + 1) % 7
         for _ in range(start_padding):
             current_week.append(None)
@@ -547,6 +548,7 @@ def show_admin_dialog():
             
         selected_dates_from_table = []
         
+        # 迴圈產生每週的 Data Editor
         for w_idx, week_dates in enumerate(weeks):
             week_data = {}
             date_map = {} 
@@ -557,10 +559,12 @@ def show_admin_dialog():
             for i, d in enumerate(week_dates):
                 col_key = col_names[i]
                 if d:
+                    # 有日期：標題顯示日期數字，內容為 False
                     col_config[col_key] = st.column_config.CheckboxColumn(label=str(d.day), required=True)
                     row_data[col_key] = False
                     date_map[col_key] = d
                 else:
+                    # 空白日期
                     col_config[col_key] = st.column_config.Column(label=" ", disabled=True)
                     row_data[col_key] = False 
             
@@ -693,7 +697,6 @@ for i, area in enumerate(areas):
 st.divider()
 
 if st.session_state['user']:
-    # ★ 改為「回顧點名表」按鈕，移除「新增公告」按鈕
     c1, c2 = st.columns([1, 4])
     with c1:
         if st.button("📅 回顧點名表", type="primary", use_container_width=True):
