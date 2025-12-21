@@ -15,16 +15,26 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# CSS 優化：調整 Checkbox 在表格中的顯示位置
+# CSS 優化：強制標題列不換行，並調整表格間距
 st.markdown("""
 <style>
+    /* 強制標題列 7 欄並排 */
     [data-testid="column"] {
         min-width: 0px !important;
+        flex: 1 1 0% !important;
         padding: 0px !important;
+        overflow-wrap: break-word; 
+        text-align: center;
     }
-    /* 讓 data_editor 的標題更緊湊 */
-    div[data-testid="stDataFrame"] {
-        width: 100%;
+    /* 讓星期標題更緊湊 */
+    div[data-testid="stMarkdownContainer"] p {
+        font-size: 0.9rem;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+    /* 縮小多個表格之間的間距，讓它看起來像一個大月曆 */
+    .stDataFrame {
+        margin-bottom: -1rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -345,7 +355,6 @@ def show_promotion_confirm_dialog():
         st.success(f"成功升級！")
         st.rerun()
 
-# ★ 新增：權限下放，所有員工可用的資料管理
 @st.dialog("📂 資料管理")
 def show_general_management_dialog():
     tab1, tab2 = st.tabs(["🎓 學生名單", "👷 工讀生名單"])
@@ -473,10 +482,10 @@ def show_admin_dialog():
                 st.session_state['preview_schedule'] = None
                 st.rerun()
 
-    # ★ 核心修改：工讀生排班改為「橫向捲動單一表格」
+    # ★ 核心修正：分週次表格，模擬月曆網格，確保手機不跑版
     with tab2:
         st.subheader("👷 工讀生排班系統")
-        st.caption("請選擇工讀生與月份，然後在下方表格直接勾選（手機可左右滑動）。")
+        st.caption("請選擇工讀生與月份，然後直接在表格中勾選。")
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
@@ -490,55 +499,94 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
+        # 標題列：日 一 二 ... 六 (手機 CSS 強制不換行)
+        cols = st.columns(7)
+        weekdays = ["日", "一", "二", "三", "四", "五", "六"] 
+        for idx, w in enumerate(weekdays):
+            cols[idx].markdown(f"**{w}**")
+            
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
-        weekdays_map = ["一", "二", "三", "四", "五", "六", "日"]
+        all_dates = [datetime.date(pt_year, pt_month, d) for d in range(1, num_days + 1)]
         
-        # 建立「單列」資料結構： {'1(一)': False, '2(二)': False ...}
-        # 這樣在 st.data_editor 就會呈現為一長條橫向表格
-        timeline_data = {}
-        date_map = {} # 用來對照 column name -> date object
+        # 將日期分組為週 (以星期日為一週開始)
+        weeks = []
+        current_week = []
         
-        for day in range(1, num_days + 1):
-            curr_date = datetime.date(pt_year, pt_month, day)
-            wk_str = weekdays_map[curr_date.weekday()]
-            col_name = f"{day}({wk_str})" # 例如: 1(日)
-            timeline_data[col_name] = [False] # 預設未選
-            date_map[col_name] = curr_date
+        # 1. 補第一週前面的空白 (如果 1 號不是星期日)
+        first_day_weekday = all_dates[0].weekday() # Python: 0=Mon, 6=Sun
+        # 我們需要 Sun=0, Mon=1...
+        # 轉換： (6 + 1) % 7 = 0 (Sun)
+        start_padding = (first_day_weekday + 1) % 7
+        for _ in range(start_padding):
+            current_week.append(None)
             
-        df_timeline = pd.DataFrame(timeline_data)
+        # 2. 填入日期
+        for d in all_dates:
+            current_week.append(d)
+            if len(current_week) == 7:
+                weeks.append(current_week)
+                current_week = []
         
-        # 設定所有欄位為 Checkbox
-        col_config = {}
-        for col in df_timeline.columns:
-            col_config[col] = st.column_config.CheckboxColumn(label=col, required=True)
+        # 3. 補最後一週後面的空白
+        if current_week:
+            while len(current_week) < 7:
+                current_week.append(None)
+            weeks.append(current_week)
             
-        # 顯示橫向表格
-        edited_df = st.data_editor(
-            df_timeline,
-            column_config=col_config,
-            hide_index=True,
-            use_container_width=False, # False 才能讓它出現橫向捲軸
-            height=80 # 高度不用太高，只要顯示一列
-        )
+        selected_dates_from_table = []
         
-        st.caption("💡 手機上可左右滑動選取日期")
+        # 4. 迴圈產生每週的 Data Editor
+        for w_idx, week_dates in enumerate(weeks):
+            week_data = {}
+            date_map = {} # column -> date
+            
+            # 欄位名稱用 c0, c1... 以便設定 column_config
+            col_names = [f"c{i}" for i in range(7)]
+            
+            # 準備這一週的資料 row (只有一列: Checkbox True/False)
+            row_data = {}
+            
+            # Column Config: 設定欄位標題 (日期數字)
+            col_config = {}
+            
+            for i, d in enumerate(week_dates):
+                col_key = col_names[i]
+                if d:
+                    # 有日期：標題顯示日期數字，內容為 False
+                    col_config[col_key] = st.column_config.CheckboxColumn(label=str(d.day), required=True)
+                    row_data[col_key] = False
+                    date_map[col_key] = d
+                else:
+                    # 空白日期：標題空白，內容停用
+                    col_config[col_key] = st.column_config.Column(label=" ", disabled=True)
+                    row_data[col_key] = False # 佔位
+            
+            df_week = pd.DataFrame([row_data]) # 轉成 DataFrame
+            
+            # 顯示表格 (隱藏 index)
+            edited_week = st.data_editor(
+                df_week,
+                column_config=col_config,
+                hide_index=True,
+                use_container_width=True,
+                key=f"week_grid_{w_idx}"
+            )
+            
+            # 收集結果
+            for col in edited_week.columns:
+                if col in date_map and edited_week[col][0]:
+                    selected_dates_from_table.append(date_map[col])
+        
         st.divider()
         
-        if st.button("確認排入選取班次", type="primary", key="save_pt_timeline"):
-            # 解析結果
-            selected_dates = []
-            # edited_df 只有一列 (index 0)
-            for col in edited_df.columns:
-                if edited_df.at[0, col]: # 如果該欄位被勾選
-                    selected_dates.append(date_map[col])
-            
-            if not selected_dates:
+        if st.button(f"確認排入選取班次", type="primary", key="save_pt_table"):
+            if not selected_dates_from_table:
                 st.error("未勾選任何日期")
             else:
                 t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
                 t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
                 count = 0
-                for date_obj in selected_dates:
+                for date_obj in selected_dates_from_table:
                     start_dt = datetime.datetime.combine(date_obj, t_s)
                     end_dt = datetime.datetime.combine(date_obj, t_e)
                     add_event_to_db("工讀", start_dt, end_dt, "part_time", st.session_state['user'], staff=pt_name)
