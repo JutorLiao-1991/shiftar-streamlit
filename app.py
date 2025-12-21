@@ -15,39 +15,6 @@ from collections import defaultdict
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
 
-# ★ CSS 優化：暴力強制 7 欄在手機上不換行，並優化格子顯示
-st.markdown("""
-<style>
-    /* 強制 7 欄並排，不準換行 */
-    [data-testid="column"] {
-        min-width: 0px !important;
-        flex: 1 1 0% !important;
-        padding: 0px !important;
-        overflow-wrap: break-word; 
-    }
-    /* 調整 checkbox 樣式，讓它盡量緊湊 */
-    div[data-testid="stCheckbox"] {
-        padding-top: 0px;
-        min-height: 0px;
-        text-align: center;
-    }
-    div[data-testid="stCheckbox"] label {
-        min-height: 0px;
-        padding-bottom: 0px;
-        margin-bottom: 0px;
-    }
-    /* 讓星期標題置中且緊湊 */
-    div[data-testid="stMarkdownContainer"] p {
-        font-size: 0.9rem;
-        margin-bottom: 5px;
-        text-align: center;
-    }
-    div[data-testid="stMarkdownContainer"] {
-        text-align: center;
-    }
-</style>
-""", unsafe_allow_html=True)
-
 if 'user' not in st.session_state:
     st.session_state['user'] = None
 if 'is_admin' not in st.session_state:
@@ -159,7 +126,7 @@ def promote_student_grade(grade_str):
     if g == "畢業": return "畢業"
     return g
 
-# ★ 點名資料庫功能 (即時讀取，不快取)
+# ★ 點名資料庫功能
 def get_roll_call_from_db(date_str):
     doc = db.collection("roll_call_records").document(date_str).get()
     if doc.exists:
@@ -559,50 +526,88 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        # ★ 回歸 7 欄網格模式 (但加上 CSS 強制不換行)
+        # ★ 新版：分週次表格 (解決手機跑版)
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
+        # 建立日期物件列表
+        all_dates = [datetime.date(pt_year, pt_month, d) for d in range(1, num_days + 1)]
         
-        # 標題列：日 一 二 ... 六
-        cols = st.columns(7)
-        weekdays = ["日", "一", "二", "三", "四", "五", "六"] # 星期日開始
-        for idx, w in enumerate(weekdays):
-            cols[idx].markdown(f"**{w}**")
+        # 將日期分組為週 (Sunday to Saturday)
+        weeks = []
+        current_week = []
+        
+        # 補前面的空白：如果 1 號不是星期日 (6)，需要補 None
+        first_day_idx = all_dates[0].weekday() # 0=Mon, 6=Sun
+        # 我們要 Sun=0
+        start_padding = (first_day_idx + 1) % 7 
+        for _ in range(start_padding):
+            current_week.append(None)
             
-        selected_dates = []
+        for d in all_dates:
+            current_week.append(d)
+            if len(current_week) == 7:
+                weeks.append(current_week)
+                current_week = []
         
-        # 計算 1 號是星期幾 (Python 預設 Mon=0...Sun=6)
-        # 我們需要 Sun=0...Sat=6
-        # 如果是 6 (Sun) -> 0, 0(Mon)->1
-        first_day_weekday_raw = datetime.date(pt_year, pt_month, 1).weekday()
-        first_day_col_idx = (first_day_weekday_raw + 1) % 7
-        
-        cols = st.columns(7)
-        col_idx = first_day_col_idx 
-        
-        # 填入日期
-        for day in range(1, num_days + 1):
-            curr_date = datetime.date(pt_year, pt_month, day)
+        # 補後面的空白
+        if current_week:
+            while len(current_week) < 7:
+                current_week.append(None)
+            weeks.append(current_week)
             
-            with cols[col_idx]:
-                # 只顯示數字，checkbox 本身不帶 label
-                if st.checkbox(f"{day}", key=f"pt_day_{day}"):
-                    selected_dates.append(curr_date)
+        weekdays_header = ["日", "一", "二", "三", "四", "五", "六"]
+        
+        selected_dates_from_table = []
+        
+        for w_idx, week_dates in enumerate(weeks):
+            # 建立該週的 DataFrame
+            # 欄位名稱直接用 "日期 (星期)"
+            week_data = {}
+            valid_dates_map = {} # 用來記錄 col_name -> date_obj
             
-            col_idx += 1
-            if col_idx > 6:
-                col_idx = 0
-                cols = st.columns(7) # 換行
+            for i, d in enumerate(week_dates):
+                col_name = weekdays_header[i]
+                if d:
+                    col_name = f"{d.day} ({weekdays_header[i]})"
+                    week_data[col_name] = [False] # 預設未選
+                    valid_dates_map[col_name] = d
+                else:
+                    # 空白日期，給一個不顯示的名稱
+                    week_data[f"empty_{i}"] = [False]
+            
+            df_week = pd.DataFrame(week_data)
+            
+            # 設定 Column Config：隱藏空白欄位
+            col_config = {}
+            for col in df_week.columns:
+                if col.startswith("empty_"):
+                    col_config[col] = st.column_config.Column(disabled=True, label=" ") # 隱藏
+                else:
+                    col_config[col] = st.column_config.CheckboxColumn(label=col, required=True)
+            
+            # 顯示表格 (隱藏 index)
+            edited_week = st.data_editor(
+                df_week,
+                column_config=col_config,
+                hide_index=True,
+                use_container_width=True,
+                key=f"week_table_{w_idx}"
+            )
+            
+            # 收集結果
+            for col in edited_week.columns:
+                if not col.startswith("empty_") and edited_week[col][0]:
+                    selected_dates_from_table.append(valid_dates_map[col])
         
         st.divider()
         
-        if st.button(f"確認排入 {len(selected_dates)} 個班次", type="primary", key="save_pt_table"):
-            if not selected_dates:
+        if st.button(f"確認排入選取班次", type="primary", key="save_pt_table"):
+            if not selected_dates_from_table:
                 st.error("未勾選任何日期")
             else:
                 t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
                 t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
                 count = 0
-                for date_obj in selected_dates:
+                for date_obj in selected_dates_from_table:
                     start_dt = datetime.datetime.combine(date_obj, t_s)
                     end_dt = datetime.datetime.combine(date_obj, t_e)
                     add_event_to_db("工讀", start_dt, end_dt, "part_time", st.session_state['user'], staff=pt_name)
