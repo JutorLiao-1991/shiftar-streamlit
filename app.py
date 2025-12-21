@@ -10,23 +10,9 @@ import pytz
 import pandas as pd
 import uuid
 import calendar as py_calendar
-from collections import defaultdict # 用於整理日期
 
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
-
-# ★ CSS 優化：強制讓多欄位在手機上並排，不堆疊
-st.markdown("""
-<style>
-    [data-testid="column"] {
-        min-width: 0px !important;
-        padding: 0px !important;
-    }
-    div[data-testid="stCheckbox"] {
-        padding-top: 5px;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 if 'user' not in st.session_state:
     st.session_state['user'] = None
@@ -438,7 +424,7 @@ def show_admin_dialog():
 
     with tab2:
         st.subheader("👷 工讀生排班系統")
-        st.caption("請選擇工讀生與月份，然後勾選上班日期。")
+        st.caption("請選擇工讀生與月份，直接在下方表格勾選排班。")
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
@@ -452,53 +438,69 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        # ★ 橫向列表式排班 (Transposed)
-        # 第一列：日 | 1 | 8 | 15 ...
+        # ★ 革命性改版：使用 st.data_editor (可滑動表格)
+        # 這能完美解決手機跑版問題，並提供直覺的勾選介面
         
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
+        weekdays_map = ["一", "二", "三", "四", "五", "六", "日"]
         
-        # 1. 將該月日期分組
-        week_map = defaultdict(list)
+        # 1. 建立資料表數據
+        schedule_data = []
         for day in range(1, num_days + 1):
             curr_date = datetime.date(pt_year, pt_month, day)
-            week_map[curr_date.weekday()].append(curr_date) # 0=Mon, 6=Sun
+            wk_str = weekdays_map[curr_date.weekday()]
+            # 格式： 12/01 (日)
+            display_date = f"{pt_month:02d}/{day:02d} ({wk_str})"
+            schedule_data.append({
+                "日期": display_date,
+                "排班": False,
+                "raw_date": curr_date # 隱藏欄位，用於後續處理
+            })
             
-        display_order = [6, 0, 1, 2, 3, 4, 5] # Sun -> Sat
-        display_names = ["日", "一", "二", "三", "四", "五", "六"]
+        df_schedule = pd.DataFrame(schedule_data)
         
-        selected_dates = []
+        # 2. 顯示編輯器
+        # column_config 設定 "排班" 為 Checkbox，並隱藏 raw_date
+        edited_df = st.data_editor(
+            df_schedule,
+            column_config={
+                "日期": st.column_config.TextColumn("日期", disabled=True),
+                "排班": st.column_config.CheckboxColumn("排班", required=True),
+                "raw_date": None # 隱藏
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=400 # 固定高度，內部可捲動
+        )
         
-        # 2. 顯示每一列 (Row)
-        for i, wk_idx in enumerate(display_order):
-            dates = week_map[wk_idx]
-            
-            # 使用 columns，第一欄是標題，後面是日期
-            # 手機上因為有 CSS min-width:0，所以不會換行
-            cols = st.columns([0.5, 1, 1, 1, 1, 1])
-            
-            # 標題
-            cols[0].markdown(f"**{display_names[i]}**")
-            
-            # 日期
-            for j, date_obj in enumerate(dates):
-                with cols[j+1]:
-                    # 這裡只顯示數字，不顯示 "日"
-                    if st.checkbox(f"{date_obj.day}", key=f"pt_d_{date_obj.day}"):
-                        selected_dates.append(date_obj)
-                        
         st.divider()
-        if st.button(f"確認排入 {len(selected_dates)} 個班次", type="primary", key="save_pt"):
-            if not selected_dates:
+        
+        # 3. 處理提交
+        if st.button("確認排入選取班次", type="primary", key="save_pt_table"):
+            # 篩選出被勾選的列
+            selected_rows = edited_df[edited_df["排班"] == True]
+            
+            if selected_rows.empty:
                 st.error("未勾選任何日期")
             else:
                 t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
                 t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
                 count = 0
-                for date_obj in selected_dates:
+                
+                for index, row in selected_rows.iterrows():
+                    # 從 dataframe 取回原始日期物件
+                    # 注意：pandas 讀出來可能是 Timestamp，要轉回 date
+                    raw_d = row["raw_date"]
+                    if isinstance(raw_d, pd.Timestamp):
+                        date_obj = raw_d.date()
+                    else:
+                        date_obj = raw_d
+                        
                     start_dt = datetime.datetime.combine(date_obj, t_s)
                     end_dt = datetime.datetime.combine(date_obj, t_e)
                     add_event_to_db("工讀", start_dt, end_dt, "part_time", st.session_state['user'], staff=pt_name)
                     count += 1
+                    
                 st.success(f"成功新增 {count} 筆工讀班表！")
                 st.rerun()
 
