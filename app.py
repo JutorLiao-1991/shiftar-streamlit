@@ -267,7 +267,7 @@ def log_cleaning(area, user):
 
 # --- 4. 彈出視窗 UI ---
 
-# 登入功能：使用 st.form 確保穩定
+# 登入功能
 @st.dialog("👤 人員登入")
 def show_login_dialog():
     with st.form("login_form"):
@@ -402,33 +402,80 @@ def show_general_management_dialog():
                 else: st.error("CSV 格式錯誤")
             except Exception as e: st.error(f"讀取失敗: {e}")
 
+        # ★ 學生表單大改版：依照需求排序與欄位檢查
         with st.expander("手動新增學生"):
             with st.form("manual_student"):
-                ms_name = st.text_input("姓名 (必填)")
+                # 第一排：姓名、學生手機
                 c1, c2 = st.columns(2)
-                ms_grade = c1.selectbox("年級 (必填)", GRADE_OPTIONS)
-                course_opts = get_unique_course_names()
-                ms_class = c2.selectbox("班別 (必填)", course_opts)
+                ms_name = c1.text_input("學生姓名 (必填)")
+                ms_phone = c2.text_input("學生手機")
+                
+                # 第二排：年級、班別
                 c3, c4 = st.columns(2)
-                ms_c1 = c3.text_input("聯絡人1 (必填)")
-                ms_p1 = c4.text_input("電話1 (必填)")
+                ms_grade = c3.selectbox("年級 (必填)", GRADE_OPTIONS)
+                course_opts = get_unique_course_names()
+                ms_class = c4.selectbox("班別 (必填)", course_opts)
+                
+                st.divider()
+                st.caption("聯絡電話 (至少填寫一項)")
+                
+                # 第三排：家裡、爸爸
                 c5, c6 = st.columns(2)
-                ms_c2 = c5.text_input("聯絡人2"); ms_p2 = c6.text_input("電話2")
+                ms_home = c5.text_input("家裡")
+                ms_dad = c6.text_input("爸爸")
+                
+                # 第四排：媽媽、其他
+                c7, c8 = st.columns(2)
+                ms_mom = c7.text_input("媽媽")
+                ms_other = c8.text_input("其他家人")
+                
                 if st.form_submit_button("新增"):
-                    if ms_name and ms_grade and ms_class and ms_c1 and ms_p1:
-                        new_rec = {"姓名": ms_name, "年級": ms_grade, "班別": ms_class, "聯絡人1": ms_c1, "電話1": ms_p1, "聯絡人2": ms_c2, "電話2": ms_p2}
+                    # 邏輯檢查
+                    contact_filled = any([ms_home, ms_dad, ms_mom, ms_other])
+                    
+                    if ms_name and ms_grade and ms_class and contact_filled:
+                        new_rec = {
+                            "姓名": ms_name, "學生手機": ms_phone,
+                            "年級": ms_grade, "班別": ms_class,
+                            "家裡": ms_home, "爸爸": ms_dad,
+                            "媽媽": ms_mom, "其他家人": ms_other
+                        }
                         current = get_students_data_cached()
                         current.append(new_rec)
                         save_students_data(current)
                         st.rerun()
-                    else: st.error("缺必填欄位")
+                    else:
+                        if not contact_filled:
+                            st.error("請至少填寫一個家長/家裡聯絡電話")
+                        else:
+                            st.error("缺必填欄位 (姓名、年級、班別)")
+
+        st.caption("學生列表 (可刪除)")
         current_students = get_students_data_cached()
         if current_students:
-            df_stu = pd.DataFrame(current_students)
+            # 調整表格顯示順序
+            display_cols = ["姓名", "學生手機", "年級", "班別", "家裡", "爸爸", "媽媽", "其他家人"]
+            # 確保資料中包含這些欄位，沒有的補空值
+            processed_list = []
+            for s in current_students:
+                row = {col: s.get(col, "") for col in display_cols}
+                processed_list.append(row)
+                
+            df_stu = pd.DataFrame(processed_list)
             st.dataframe(df_stu, use_container_width=True)
-            to_del = st.multiselect("刪除學生", [s['姓名'] for s in current_students])
+            
+            # ★ 刪除邏輯優化：顯示「姓名 (班別)」，支援多班級學生刪除
+            delete_options = [f"{s.get('姓名')} ({s.get('班別')})" for s in current_students]
+            to_del = st.multiselect("刪除學生", delete_options)
+            
             if to_del and st.button("確認刪除"):
-                save_students_data([s for s in current_students if s['姓名'] not in to_del])
+                # 解析選擇的項目，過濾掉要刪除的
+                new_list = []
+                for s in current_students:
+                    label = f"{s.get('姓名')} ({s.get('班別')})"
+                    if label not in to_del:
+                        new_list.append(s)
+                save_students_data(new_list)
                 st.rerun()
 
     with tab2:
@@ -507,7 +554,6 @@ def show_admin_dialog():
                 st.session_state['preview_schedule'] = None
                 st.rerun()
 
-    # ★ 工讀生排班：分週次表格 (週曆模式)
     with tab2:
         st.subheader("👷 工讀生排班系統")
         st.caption("請選擇工讀生與月份，然後直接在表格中勾選。")
@@ -534,7 +580,6 @@ def show_admin_dialog():
         
         weeks = []
         current_week = []
-        
         first_day_weekday = all_dates[0].weekday() 
         start_padding = (first_day_weekday + 1) % 7
         for _ in range(start_padding):
@@ -658,11 +703,11 @@ def show_admin_dialog():
 tz = pytz.timezone('Asia/Taipei')
 now = datetime.datetime.now(tz)
 
-# ★ 自動登出：僅在凌晨 06:00 ~ 06:30 之間強制登出
+# 自動登出：僅在凌晨 06:00 ~ 06:30 之間
 if now.hour == 6 and now.minute <= 30 and st.session_state['user'] is not None:
     st.session_state['user'] = None; st.session_state['is_admin'] = False; st.rerun()
 
-# ★ 如果未登入，顯示登入區塊並停止執行後續程式碼
+# 如果未登入，顯示登入區塊
 if st.session_state['user'] is None:
     st.title("🏫 鳩特數理行政班表")
     st.info("請先登入以使用系統")
@@ -690,7 +735,7 @@ if st.session_state['user'] is None:
                     st.rerun()
                 else:
                     st.error("密碼錯誤")
-    st.stop() # 停止執行，確保畫面乾淨
+    st.stop() # 停止執行
 
 # 登入後顯示的內容
 col_title, col_login = st.columns([3, 1], vertical_alignment="center")
@@ -726,10 +771,10 @@ for i, area in enumerate(areas):
 
 st.divider()
 
-# ★ 頂部按鈕列
-if st.button("📂 資料管理", type="secondary", use_container_width=True): show_general_management_dialog()
-if st.session_state['is_admin']:
-    if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
+if st.session_state['user']:
+    if st.button("📂 資料管理", type="secondary", use_container_width=True): show_general_management_dialog()
+    if st.session_state['is_admin']:
+        if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
 
 all_events = get_all_events_cached()
 calendar_options = {
@@ -745,7 +790,6 @@ calendar_options = {
 }
 cal = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-# 點擊日期：只開公告
 if cal.get("dateClick"):
     clicked = cal["dateClick"]["date"]
     try:
@@ -767,7 +811,7 @@ if cal.get("eventClick"):
 st.divider()
 st.subheader("📋 每日點名")
 
-# ★ 回顧按鈕放在這裡
+# ★ 回顧點名按鈕移到這裡
 if st.button("📅 切換/回顧點名日期", type="primary", use_container_width=True):
     show_roll_call_review_dialog()
 
@@ -794,6 +838,9 @@ if daily_courses:
         if stu.get('班別') in daily_courses: target_students.append(stu['姓名'])
 else: st.write("📅 當日無排課紀錄")
 
+# ★ 修復重複學生 Bug：使用 set 去除重複姓名
+target_students = list(set(target_students))
+
 if db_record:
     current_data = db_record
 else:
@@ -809,28 +856,31 @@ def update_status_and_save(student_name, from_list, to_list):
     save_roll_call_to_db(date_key, save_data)
     st.rerun()
 
-if not current_data['absent'] and not current_data['present'] and not current_data['leave']:
-    st.info("無須點名")
+if st.session_state['user']:
+    if not current_data['absent'] and not current_data['present'] and not current_data['leave']:
+        st.info("無須點名")
+    else:
+        if st.button("🔄 刷新數據 (同步最新狀態)", use_container_width=True): st.rerun()
+        with st.expander("點名表單", expanded=True):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown("### 🔴 未到")
+                if current_data['absent']:
+                    cols = st.columns(4)
+                    for i, s in enumerate(current_data['absent']):
+                        if cols[i%4].button(s, key=f"ab_{s}_{date_key}"):
+                            update_status_and_save(s, "absent", "present")
+            with c2:
+                st.markdown("### 🟢 已到")
+                for s in current_data['present']:
+                    if st.button(f"✅ {s}", key=f"pr_{s}_{date_key}", type="primary", use_container_width=True):
+                        update_status_and_save(s, "present", "absent")
+            with c3:
+                st.markdown("### 🟡 請假")
+                val = st.selectbox("請假", ["選擇..."] + current_data['absent'], key=f"lv_{date_key}")
+                if val != "選擇...": update_status_and_save(val, "absent", "leave")
+                for s in current_data['leave']:
+                    if st.button(f"🤒 {s}", key=f"le_{s}_{date_key}", use_container_width=True):
+                        update_status_and_save(s, "leave", "absent")
 else:
-    if st.button("🔄 刷新數據 (同步最新狀態)", use_container_width=True): st.rerun()
-    with st.expander("點名表單", expanded=True):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown("### 🔴 未到")
-            if current_data['absent']:
-                cols = st.columns(4)
-                for i, s in enumerate(current_data['absent']):
-                    if cols[i%4].button(s, key=f"ab_{s}_{date_key}"):
-                        update_status_and_save(s, "absent", "present")
-        with c2:
-            st.markdown("### 🟢 已到")
-            for s in current_data['present']:
-                if st.button(f"✅ {s}", key=f"pr_{s}_{date_key}", type="primary", use_container_width=True):
-                    update_status_and_save(s, "present", "absent")
-        with c3:
-            st.markdown("### 🟡 請假")
-            val = st.selectbox("請假", ["選擇..."] + current_data['absent'], key=f"lv_{date_key}")
-            if val != "選擇...": update_status_and_save(val, "absent", "leave")
-            for s in current_data['leave']:
-                if st.button(f"🤒 {s}", key=f"le_{s}_{date_key}", use_container_width=True):
-                    update_status_and_save(s, "leave", "absent")
+    st.warning("請登入以進行點名")
