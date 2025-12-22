@@ -19,12 +19,10 @@ st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layo
 # CSS 優化
 st.markdown("""
 <style>
-    /* 讓欄位最小寬度為 0，防止被強制換行 */
     [data-testid="column"] {
         min-width: 0px !important;
         padding: 0px !important;
     }
-    /* 調整 checkbox 樣式 */
     div[data-testid="stCheckbox"] {
         padding-top: 5px;
         min-height: 0px;
@@ -40,7 +38,6 @@ st.markdown("""
         text-align: center;
         font-weight: bold;
     }
-    /* 讓按鈕文字置中且不換行 */
     div[data-testid="stButton"] button {
         white-space: nowrap;
         overflow: hidden;
@@ -270,29 +267,11 @@ def log_cleaning(area, user):
     db.collection("latest_cleaning_status").document(area).set({"area": area, "staff": user, "timestamp": now})
     st.toast(f"✨ {area} 清潔完成！", icon="🧹")
 
-# ★ 正規化函式：移除特殊字元與空格，用於寬鬆比對
 def normalize_string(s):
     if not isinstance(s, str): return str(s)
-    # 移除 [ ] ( ) 【 】 還有 - _ 以及所有空白
     return re.sub(r'[ \[\]\(\)（）【】\-_\s]', '', s)
 
 # --- 4. 彈出視窗 UI ---
-
-# 登入功能
-@st.dialog("👤 人員登入")
-def show_login_dialog():
-    with st.form("login_form"):
-        user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
-        password = st.text_input("請輸入密碼", type="password")
-        submitted = st.form_submit_button("登入", use_container_width=True)
-        if submitted:
-            if user == "請選擇": st.error("請選擇身份")
-            else:
-                if (user in ADMINS and password == ADMIN_PASSWORD) or (user not in ADMINS and password == STAFF_PASSWORD):
-                    st.session_state['user'] = user
-                    st.session_state['is_admin'] = (user in ADMINS)
-                    st.rerun()
-                else: st.error("密碼錯誤")
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
@@ -364,7 +343,7 @@ def show_general_management_dialog():
         if st.session_state['is_admin']:
             if st.button("⬆️ 執行年度升級 (7月)", type="primary"): show_promotion_confirm_dialog()
         
-        uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入", type=['csv', 'xlsx'])
+        uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入 (支援 ERP 格式)", type=['csv', 'xlsx'])
         if uploaded_file:
             try:
                 df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
@@ -431,32 +410,15 @@ def show_general_management_dialog():
 
         st.divider(); st.caption("📝 學生列表 (直接編輯)")
         if current_students:
-            # 準備可編輯的 DataFrame
             df_stu = pd.DataFrame([{col: s.get(col, "") for col in ["姓名", "學生手機", "年級", "班別", "家裡", "爸爸", "媽媽", "其他家人"]} for s in current_students])
-            # 加一個不顯示的 ID 欄位來對應原始資料
             df_stu["_id"] = [f"{s.get('姓名')}_{s.get('班別')}" for s in current_students]
-            
-            edited_df = st.data_editor(
-                df_stu, 
-                use_container_width=True, 
-                num_rows="dynamic", 
-                column_config={"_id": None}, # 隱藏 _id 欄位
-                key="stu_edit"
-            )
-            
+            edited_df = st.data_editor(df_stu, use_container_width=True, num_rows="dynamic", column_config={"_id": None}, key="stu_edit")
             if st.button("💾 儲存修改"):
-                # 修復語法錯誤：先轉換成 list，再處理
-                raw_list = edited_df.fillna("").to_dict('records')
                 clean_data = []
-                for r in raw_list:
-                    # 移除 _id 欄位
+                for r in edited_df.fillna("").to_dict('records'):
                     if "_id" in r: del r["_id"]
-                    # 確保有姓名才存入
-                    if r.get("姓名"):
-                        clean_data.append(r)
-                
-                save_students_data(clean_data)
-                st.success("已更新"); st.rerun()
+                    if r.get("姓名"): clean_data.append(r)
+                save_students_data(clean_data); st.success("已更新"); st.rerun()
 
     with tab2:
         current_pts = get_part_timers_list_cached()
@@ -573,7 +535,18 @@ st.divider()
 cols = st.columns(4)
 for i, area in enumerate(["櫃檯茶水間", "大教室", "小教室", "流放教室"]):
     stat = get_cleaning_status(area)
-    diff = (datetime.datetime.now() - datetime.datetime.fromisoformat(stat['timestamp'])).days if stat else 999
+    # 修正錯誤：安全解析 datetime
+    last_clean_time = None
+    if stat and 'timestamp' in stat:
+        ts = stat['timestamp']
+        if isinstance(ts, str):
+            try: ts = datetime.datetime.fromisoformat(ts)
+            except: ts = None
+        if isinstance(ts, datetime.datetime):
+            if ts.tzinfo: ts = ts.replace(tzinfo=None)
+            last_clean_time = ts
+    
+    diff = (datetime.datetime.now() - last_clean_time).days if last_clean_time else 999
     clr = "green" if diff<=3 else "orange" if diff<=6 else "red"
     with cols[i]:
         st.markdown(f"{area} ### :{clr}[{diff}天]"); st.caption(f"上次: {stat.get('staff','無') if stat else '無'}")
@@ -597,18 +570,15 @@ st.info(f"檢視：**{sel_date}**")
 d_key = sel_date.isoformat()
 db_rec = get_roll_call_from_db(d_key)
 
-# ★ 核心修正：超級模糊比對邏輯 + Debug
 courses_show = []
 courses_filter = []
 for e in get_all_events_cached():
     if e['start'].startswith(d_key) and e['extendedProps'].get('type') == 'shift':
         t = e['extendedProps'].get('title', '')
-        # 儲存「正規化後」的課程名稱以便比對
         courses_filter.append(normalize_string(t))
         courses_show.append(t + (f" ({e['extendedProps']['location']})" if e['extendedProps'].get('location') else ""))
 
-# Debug 區塊
-with st.expander("🕵️‍♂️ 偵錯模式 (看不到學生請點我)"):
+with st.expander("🕵️‍♂️ 偵錯模式"):
     st.write(f"今日課程 (正規化)：{courses_filter}")
     st.write("---")
     st.write("比對失敗的學生：")
@@ -616,10 +586,8 @@ with st.expander("🕵️‍♂️ 偵錯模式 (看不到學生請點我)"):
         s_cls = normalize_string(s.get('班別', ''))
         matched = False
         for c in courses_filter:
-            # 只要課程名稱出現在學生班級裡，或反過來，就算對到
-            if (c in s_cls) or (s_cls in c): matched = True
-        if not matched and s_cls:
-             st.caption(f"{s['姓名']} ({s.get('班別')}) -> {s_cls}")
+            if c in s_cls or s_cls in c: matched = True
+        if not matched and s_cls: st.caption(f"{s['姓名']} ({s.get('班別')}) -> {s_cls}")
 
 targets = []
 if courses_show:
@@ -627,8 +595,7 @@ if courses_show:
     for s in get_students_data_cached():
         s_cls = normalize_string(s.get('班別', ''))
         for c in courses_filter:
-            if (c in s_cls) or (s_cls in c):
-                targets.append(s['姓名']); break
+            if (c in s_cls) or (s_cls in c): targets.append(s['姓名']); break
 else: st.write("無課程")
 
 targets = list(set(targets))
@@ -648,7 +615,7 @@ else:
             cols = st.columns(4)
             for i, s in enumerate(curr['absent']): cols[i%4].button(s, key=f"ab_{s}", on_click=upd, args=(s, "absent", "present"))
         
-        st.markdown("### 🟢 已到") # 4欄網格
+        st.markdown("### 🟢 已到") 
         if curr['present']:
             cols = st.columns(4)
             for i, s in enumerate(curr['present']): cols[i%4].button(f"✅ {s}", key=f"pr_{s}", type="primary", on_click=upd, args=(s, "present", "absent"))
@@ -656,6 +623,6 @@ else:
         st.markdown("### 🟡 請假")
         l_who = st.selectbox("選擇請假", ["選擇..."]+curr['absent'], key='lv_sel')
         if l_who != "選擇...": upd(l_who, "absent", "leave")
-        if curr['leave']: # 4欄網格
+        if curr['leave']: 
             cols = st.columns(4)
             for i, s in enumerate(curr['leave']): cols[i%4].button(f"🤒 {s}", key=f"le_{s}", on_click=upd, args=(s, "leave", "absent"))
