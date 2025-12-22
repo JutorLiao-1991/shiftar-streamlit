@@ -267,6 +267,35 @@ def log_cleaning(area, user):
 
 # --- 4. 彈出視窗 UI ---
 
+# 登入功能：使用 st.form 確保穩定
+@st.dialog("👤 人員登入")
+def show_login_dialog():
+    with st.form("login_form"):
+        user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
+        password = st.text_input("請輸入密碼", type="password")
+        submitted = st.form_submit_button("登入", use_container_width=True)
+        
+        if submitted:
+            if user == "請選擇": 
+                st.error("請選擇身份")
+            else:
+                is_valid = False
+                is_admin = False
+                if user in ADMINS:
+                    if password == ADMIN_PASSWORD:
+                        is_valid = True
+                        is_admin = True
+                else:
+                    if password == STAFF_PASSWORD:
+                        is_valid = True
+                
+                if is_valid:
+                    st.session_state['user'] = user
+                    st.session_state['is_admin'] = is_admin
+                    st.rerun()
+                else:
+                    st.error("密碼錯誤")
+
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
     if props.get('type') == 'holiday':
@@ -495,7 +524,6 @@ def show_admin_dialog():
         st.divider()
         st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
         
-        # 標題列
         cols = st.columns(7)
         weekdays = ["日", "一", "二", "三", "四", "五", "六"] 
         for idx, w in enumerate(weekdays):
@@ -504,9 +532,9 @@ def show_admin_dialog():
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         all_dates = [datetime.date(pt_year, pt_month, d) for d in range(1, num_days + 1)]
         
-        # 分週邏輯
         weeks = []
         current_week = []
+        
         first_day_weekday = all_dates[0].weekday() 
         start_padding = (first_day_weekday + 1) % 7
         for _ in range(start_padding):
@@ -525,7 +553,6 @@ def show_admin_dialog():
             
         selected_dates_from_table = []
         
-        # 迴圈產生每週的 Data Editor
         for w_idx, week_dates in enumerate(weeks):
             col_names = [f"c{i}" for i in range(7)]
             row_data = {}
@@ -626,12 +653,13 @@ def show_admin_dialog():
                 batch_delete_events([event_map[l] for l in selected_labels])
                 st.rerun()
 
-# --- 5. 主介面邏輯 (★ 修改重點：登入邏輯移至首頁，不使用 Dialog) ---
+# --- 5. 主介面邏輯 ---
 
 tz = pytz.timezone('Asia/Taipei')
 now = datetime.datetime.now(tz)
-# 凌晨自動登出
-if 1 <= now.hour < 5 and st.session_state['user'] is not None:
+
+# ★ 自動登出：僅在凌晨 06:00 ~ 06:30 之間強制登出
+if now.hour == 6 and now.minute <= 30 and st.session_state['user'] is not None:
     st.session_state['user'] = None; st.session_state['is_admin'] = False; st.rerun()
 
 # ★ 如果未登入，顯示登入區塊並停止執行後續程式碼
@@ -693,15 +721,12 @@ for i, area in enumerate(areas):
         st.markdown(f"### :{color}[{days_diff}]")
         st.caption(f"最後打掃：{last_cleaner}")
         if st.button("已清潔", key=f"clean_{i}", use_container_width=True):
-            log_cleaning(area, st.session_state['user']); st.rerun()
+            if st.session_state['user']: log_cleaning(area, st.session_state['user']); st.rerun()
+            else: st.error("請先登入")
 
 st.divider()
 
-c1, c2 = st.columns([1, 4])
-with c1:
-    if st.button("📅 回顧點名表", type="primary", use_container_width=True):
-        show_roll_call_review_dialog()
-        
+# ★ 頂部按鈕列
 if st.button("📂 資料管理", type="secondary", use_container_width=True): show_general_management_dialog()
 if st.session_state['is_admin']:
     if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
@@ -731,15 +756,20 @@ if cal.get("dateClick"):
             d_obj = dt_utc.astimezone(pytz.timezone('Asia/Taipei')).date()
         else: d_obj = datetime.datetime.strptime(clicked, "%Y-%m-%d").date()
         
-        show_notice_dialog(default_date=d_obj)
+        if st.session_state['user']: show_notice_dialog(default_date=d_obj)
     except: pass
 
 if cal.get("eventClick"):
-    show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
+    if st.session_state['user']:
+        show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 (即時同步) ---
+# --- 6. 智慧點名系統 ---
 st.divider()
 st.subheader("📋 每日點名")
+
+# ★ 回顧按鈕放在這裡
+if st.button("📅 切換/回顧點名日期", type="primary", use_container_width=True):
+    show_roll_call_review_dialog()
 
 # 決定日期
 if 'selected_calendar_date' in st.session_state:
