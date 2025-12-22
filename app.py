@@ -626,3 +626,4 @@ else:
         if curr['leave']: 
             cols = st.columns(4)
             for i, s in enumerate(curr['leave']): cols[i%4].button(f"🤒 {s}", key=f"le_{s}", on_click=upd, args=(s, "leave", "absent"))
+ 
