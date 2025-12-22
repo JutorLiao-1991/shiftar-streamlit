@@ -270,10 +270,10 @@ def log_cleaning(area, user):
     db.collection("latest_cleaning_status").document(area).set({"area": area, "staff": user, "timestamp": now})
     st.toast(f"✨ {area} 清潔完成！", icon="🧹")
 
-# ★ 正規化字串函式：移除空白、括號、特殊符號，只留中文字與英數字
+# ★ 正規化函式：移除特殊字元與空格，用於寬鬆比對
 def normalize_string(s):
     if not isinstance(s, str): return str(s)
-    # 移除 [ ] ( ) 【 】 （ ） 還有空白
+    # 移除 [ ] ( ) 【 】 還有 - _ 以及所有空白
     return re.sub(r'[ \[\]\(\)（）【】\-_\s]', '', s)
 
 # --- 4. 彈出視窗 UI ---
@@ -431,12 +431,32 @@ def show_general_management_dialog():
 
         st.divider(); st.caption("📝 學生列表 (直接編輯)")
         if current_students:
+            # 準備可編輯的 DataFrame
             df_stu = pd.DataFrame([{col: s.get(col, "") for col in ["姓名", "學生手機", "年級", "班別", "家裡", "爸爸", "媽媽", "其他家人"]} for s in current_students])
+            # 加一個不顯示的 ID 欄位來對應原始資料
             df_stu["_id"] = [f"{s.get('姓名')}_{s.get('班別')}" for s in current_students]
-            edited_df = st.data_editor(df_stu, use_container_width=True, num_rows="dynamic", column_config={"_id": None}, key="stu_edit")
+            
+            edited_df = st.data_editor(
+                df_stu, 
+                use_container_width=True, 
+                num_rows="dynamic", 
+                column_config={"_id": None}, # 隱藏 _id 欄位
+                key="stu_edit"
+            )
+            
             if st.button("💾 儲存修改"):
-                clean_data = [r for r in edited_df.fillna("").to_dict('records') if r.get("姓名") and del r["_id"] is None]
-                save_students_data(clean_data); st.success("已更新"); st.rerun()
+                # 修復語法錯誤：先轉換成 list，再處理
+                raw_list = edited_df.fillna("").to_dict('records')
+                clean_data = []
+                for r in raw_list:
+                    # 移除 _id 欄位
+                    if "_id" in r: del r["_id"]
+                    # 確保有姓名才存入
+                    if r.get("姓名"):
+                        clean_data.append(r)
+                
+                save_students_data(clean_data)
+                st.success("已更新"); st.rerun()
 
     with tab2:
         current_pts = get_part_timers_list_cached()
@@ -577,27 +597,29 @@ st.info(f"檢視：**{sel_date}**")
 d_key = sel_date.isoformat()
 db_rec = get_roll_call_from_db(d_key)
 
-# ★ 修正重點：超級模糊比對 + Debug 模式
+# ★ 核心修正：超級模糊比對邏輯 + Debug
 courses_show = []
 courses_filter = []
 for e in get_all_events_cached():
     if e['start'].startswith(d_key) and e['extendedProps'].get('type') == 'shift':
         t = e['extendedProps'].get('title', '')
+        # 儲存「正規化後」的課程名稱以便比對
         courses_filter.append(normalize_string(t))
         courses_show.append(t + (f" ({e['extendedProps']['location']})" if e['extendedProps'].get('location') else ""))
 
-# 顯示 Debug 資訊
+# Debug 區塊
 with st.expander("🕵️‍♂️ 偵錯模式 (看不到學生請點我)"):
-    st.write(f"系統判定今日課程 (正規化後)：{courses_filter}")
+    st.write(f"今日課程 (正規化)：{courses_filter}")
     st.write("---")
-    st.write("班級比對失敗的學生：")
+    st.write("比對失敗的學生：")
     for s in get_students_data_cached():
         s_cls = normalize_string(s.get('班別', ''))
         matched = False
         for c in courses_filter:
-            if c in s_cls or s_cls in c: matched = True
-        if not matched and s_cls: # 只列出有班級但沒對上的
-             st.caption(f"{s['姓名']} (班級: {s.get('班別')}) -> 正規化: {s_cls}")
+            # 只要課程名稱出現在學生班級裡，或反過來，就算對到
+            if (c in s_cls) or (s_cls in c): matched = True
+        if not matched and s_cls:
+             st.caption(f"{s['姓名']} ({s.get('班別')}) -> {s_cls}")
 
 targets = []
 if courses_show:
@@ -626,14 +648,14 @@ else:
             cols = st.columns(4)
             for i, s in enumerate(curr['absent']): cols[i%4].button(s, key=f"ab_{s}", on_click=upd, args=(s, "absent", "present"))
         
-        st.markdown("### 🟢 已到") # 改成 4 欄網格
+        st.markdown("### 🟢 已到") # 4欄網格
         if curr['present']:
             cols = st.columns(4)
             for i, s in enumerate(curr['present']): cols[i%4].button(f"✅ {s}", key=f"pr_{s}", type="primary", on_click=upd, args=(s, "present", "absent"))
             
-        st.markdown("### 🟡 請假") # 下拉選單 + 4 欄網格顯示已請假者
+        st.markdown("### 🟡 請假")
         l_who = st.selectbox("選擇請假", ["選擇..."]+curr['absent'], key='lv_sel')
         if l_who != "選擇...": upd(l_who, "absent", "leave")
-        if curr['leave']:
+        if curr['leave']: # 4欄網格
             cols = st.columns(4)
             for i, s in enumerate(curr['leave']): cols[i%4].button(f"🤒 {s}", key=f"le_{s}", on_click=upd, args=(s, "leave", "absent"))
