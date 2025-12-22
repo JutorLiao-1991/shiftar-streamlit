@@ -19,12 +19,10 @@ st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layo
 # CSS 優化
 st.markdown("""
 <style>
-    /* 讓欄位最小寬度為 0，防止被強制換行 */
     [data-testid="column"] {
         min-width: 0px !important;
         padding: 0px !important;
     }
-    /* 調整 checkbox 樣式 */
     div[data-testid="stCheckbox"] {
         padding-top: 5px;
         min-height: 0px;
@@ -33,11 +31,9 @@ st.markdown("""
     div[data-testid="stCheckbox"] label {
         min-height: 0px;
     }
-    /* 縮小表格間距 */
     .stDataFrame {
         margin-bottom: -1rem;
     }
-    /* 讓星期標題置中 */
     div[data-testid="stMarkdownContainer"] p {
         text-align: center;
         font-weight: bold;
@@ -155,7 +151,6 @@ def promote_student_grade(grade_str):
     if g == "畢業": return "畢業"
     return g
 
-# ★ 點名資料庫
 def get_roll_call_from_db(date_str):
     doc = db.collection("roll_call_records").document(date_str).get()
     if doc.exists: return doc.to_dict()
@@ -267,6 +262,35 @@ def log_cleaning(area, user):
     st.toast(f"✨ {area} 清潔完成！", icon="🧹")
 
 # --- 4. 彈出視窗 UI ---
+
+# 登入功能
+@st.dialog("👤 人員登入")
+def show_login_dialog():
+    with st.form("login_form"):
+        user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
+        password = st.text_input("請輸入密碼", type="password")
+        submitted = st.form_submit_button("登入", use_container_width=True)
+        
+        if submitted:
+            if user == "請選擇": 
+                st.error("請選擇身份")
+            else:
+                is_valid = False
+                is_admin = False
+                if user in ADMINS:
+                    if password == ADMIN_PASSWORD:
+                        is_valid = True
+                        is_admin = True
+                else:
+                    if password == STAFF_PASSWORD:
+                        is_valid = True
+                
+                if is_valid:
+                    st.session_state['user'] = user
+                    st.session_state['is_admin'] = is_admin
+                    st.rerun()
+                else:
+                    st.error("密碼錯誤")
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
@@ -383,10 +407,7 @@ def show_general_management_dialog():
                         for index, row in df.iterrows():
                             name = str(row.get('姓名', '')).strip()
                             grade = str(row.get('年級', '')).strip()
-                            
-                            # ★ 班級拆分邏輯：若有多個班，拆成多筆記錄
                             raw_class_str = str(row.get('所屬班級', '')).strip()
-                            # 支援換行(\n) 或 逗號(,) 分隔
                             class_list = re.split(r'[\n,]+', raw_class_str)
                             
                             contact_str = str(row.get('聯絡方式', ''))
@@ -405,7 +426,6 @@ def show_general_management_dialog():
                                     if not other_phone: other_phone = line
                                     else: other_phone += f", {line}"
 
-                            # 對每個班級建立一筆資料
                             for cls in class_list:
                                 cls = cls.strip()
                                 if not cls: continue
@@ -417,11 +437,9 @@ def show_general_management_dialog():
                                 }
                                 new_students.append(new_rec)
                     else:
-                        # 一般格式
                         raw_data = df.to_dict('records')
                         for r in raw_data:
                             if r.get('姓名'):
-                                # 這裡也可以做班級拆分，假設一般 CSV 也是用逗號分隔
                                 cls_str = str(r.get('班別', ''))
                                 cls_list = re.split(r'[\n,]+', cls_str)
                                 for c in cls_list:
@@ -508,32 +526,26 @@ def show_general_management_dialog():
             processed_list = []
             for s in current_students:
                 row = {col: s.get(col, "") for col in display_cols}
-                # 加入一個隱藏的 id 欄位 (或用班別+姓名當 key) 方便刪除
                 row["_id"] = f"{s.get('姓名')}_{s.get('班別')}"
                 processed_list.append(row)
                 
             df_stu = pd.DataFrame(processed_list)
             
-            # ★ 升級為 data_editor，並開啟刪除功能 (num_rows="dynamic")
             edited_df = st.data_editor(
                 df_stu,
                 use_container_width=True,
-                num_rows="dynamic", # 允許新增刪除行
+                num_rows="dynamic",
                 key="student_editor",
                 column_config={
-                    "_id": None # 隱藏 ID 欄位
+                    "_id": None
                 }
             )
             
             if st.button("💾 儲存修改 (含刪除)", type="primary"):
-                # 將編輯後的 DataFrame 轉回 List[Dict]
-                # fillna("") 確保不會有 NaN
                 new_data = edited_df.fillna("").to_dict('records')
-                # 移除我們剛剛加的 _id 欄位
                 final_data = []
                 for r in new_data:
                     if "_id" in r: del r["_id"]
-                    # 簡單過濾空行 (若使用者按了新增但沒填內容)
                     if r.get("姓名"):
                         final_data.append(r)
                 
@@ -900,10 +912,8 @@ for e in all_events:
         c_title = props.get('title', '')
         c_loc = props.get('location', '')
         
-        # 存入比對用的純課程名稱
         daily_courses_filter.append(c_title)
         
-        # 存入顯示用的完整名稱 (含教室)
         if c_loc:
             daily_courses_display.append(f"{c_title} ({c_loc})")
         else:
@@ -912,16 +922,23 @@ for e in all_events:
 all_students = get_students_data_cached()
 target_students = []
 
+# ★ 超級寬鬆比對邏輯：移除所有空白後，雙向包含檢查
 if daily_courses_display:
     st.write(f"📅 當日課程：{'、'.join(daily_courses_display)}")
     for stu in all_students:
-        # 使用純課程名稱來比對學生班別
-        if stu.get('班別') in daily_courses_filter:
-            target_students.append(stu['姓名'])
+        raw_class = str(stu.get('班別', ''))
+        # 移除空白，方便比對 (例如 "高一 數學" == "高一數學")
+        clean_class = raw_class.replace(" ", "")
+        
+        for course in daily_courses_filter:
+            clean_course = str(course).replace(" ", "")
+            # 雙向比對： 排課名稱在學生班級裡 OR 學生班級在排課名稱裡
+            if (clean_course in clean_class) or (clean_class in clean_course):
+                target_students.append(stu['姓名'])
+                break # 只要對到一堂課就加入，不用重複加
 else:
     st.write("📅 當日無排課紀錄")
 
-# ★ 修復重複學生 Bug：使用 set 去除重複姓名
 target_students = list(set(target_students))
 
 if db_record:
