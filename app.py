@@ -10,6 +10,7 @@ import pytz
 import pandas as pd
 import uuid
 import calendar as py_calendar
+import re # 新增：用於解析電話號碼
 from collections import defaultdict
 
 # --- 1. 系統設定 ---
@@ -18,12 +19,10 @@ st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layo
 # CSS 優化
 st.markdown("""
 <style>
-    /* 讓欄位最小寬度為 0，防止被強制換行 */
     [data-testid="column"] {
         min-width: 0px !important;
         padding: 0px !important;
     }
-    /* 調整 checkbox 樣式 */
     div[data-testid="stCheckbox"] {
         padding-top: 5px;
         min-height: 0px;
@@ -32,11 +31,9 @@ st.markdown("""
     div[data-testid="stCheckbox"] label {
         min-height: 0px;
     }
-    /* 縮小表格間距 */
     .stDataFrame {
         margin-bottom: -1rem;
     }
-    /* 讓星期標題置中 */
     div[data-testid="stMarkdownContainer"] p {
         text-align: center;
         font-weight: bold;
@@ -154,7 +151,6 @@ def promote_student_grade(grade_str):
     if g == "畢業": return "畢業"
     return g
 
-# ★ 點名資料庫
 def get_roll_call_from_db(date_str):
     doc = db.collection("roll_call_records").document(date_str).get()
     if doc.exists: return doc.to_dict()
@@ -267,9 +263,6 @@ def log_cleaning(area, user):
 
 # --- 4. 彈出視窗 UI ---
 
-# 登入功能 (不使用 st.dialog，因為已移至首頁)
-# ... (登入邏輯在主程式)
-
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
     if props.get('type') == 'holiday':
@@ -358,13 +351,10 @@ def show_promotion_confirm_dialog():
 def show_general_management_dialog():
     tab1, tab2 = st.tabs(["🎓 學生名單", "👷 工讀生名單"])
     
-    # 準備現有學生資料，用於自動帶入
     current_students = get_students_data_cached()
-    # 建立一個 { "姓名 (年級)": 學生資料dict } 的對照表
     student_map = {}
     for s in current_students:
         label = f"{s.get('姓名')} ({s.get('年級', '')})"
-        # 這裡會覆蓋重複姓名，但對於「帶入資料」來說，取最後一筆通常沒問題
         student_map[label] = s
     
     with tab1:
@@ -372,26 +362,102 @@ def show_general_management_dialog():
         if st.session_state['is_admin']:
             if st.button("⬆️ 執行年度升級 (7月)", type="primary"): show_promotion_confirm_dialog()
         
-        uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入", type=['csv'])
+        # ★ 升級版：支援 CSV 和 Excel，並自動解析 ERP 格式
+        uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入 (支援 ERP 格式)", type=['csv', 'xlsx'])
         if uploaded_file:
             try:
-                df = pd.read_csv(uploaded_file)
-                if all(col in df.columns for col in ["姓名", "年級", "班別", "聯絡人1", "電話1"]):
-                    if st.button("確認匯入"):
-                        new_students = df.to_dict('records')
-                        new_students = [{k: (v if pd.notna(v) else "") for k, v in r.items()} for r in new_students]
+                # 讀取檔案
+                if uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                else:
+                    df = pd.read_excel(uploaded_file)
+                
+                st.write("預覽檔案內容：", df.head(3))
+
+                if st.button("確認匯入"):
+                    new_students = []
+                    
+                    # 判斷是否為 ERP 格式 (檢查關鍵欄位)
+                    is_erp = '聯絡方式' in df.columns and '所屬班級' in df.columns
+                    
+                    if is_erp:
+                        # ★ ERP 格式解析邏輯
+                        for index, row in df.iterrows():
+                            # 1. 基本資料
+                            name = str(row.get('姓名', '')).strip()
+                            grade = str(row.get('年級', '')).strip()
+                            # 班級可能會有 [團] 這種字，如果想保留就保留，想清理可以用 re
+                            class_name = str(row.get('所屬班級', '')).strip()
+                            
+                            # 2. 解析聯絡方式
+                            contact_str = str(row.get('聯絡方式', ''))
+                            
+                            # 預設空值
+                            s_phone, dad_phone, mom_phone, home_phone, other_phone = "", "", "", "", ""
+                            
+                            # 分割換行
+                            lines = contact_str.split('\n')
+                            for line in lines:
+                                line = line.strip()
+                                # 提取號碼 (簡單過濾非數字字元)
+                                number_match = re.search(r'\d[\d\-]+', line)
+                                number = number_match.group(0) if number_match else ""
+                                
+                                if not number: continue
+                                
+                                if "個人手機" in line:
+                                    s_phone = number
+                                elif "爸爸" in line:
+                                    dad_phone = number
+                                elif "媽媽" in line:
+                                    mom_phone = number
+                                elif "Tel" in line or "家" in line:
+                                    home_phone = number
+                                else:
+                                    # 其他未分類的號碼放入其他
+                                    if not other_phone: other_phone = line
+                                    else: other_phone += f", {line}"
+
+                            new_rec = {
+                                "姓名": name, "年級": grade, "班別": class_name,
+                                "學生手機": s_phone,
+                                "家裡": home_phone, "爸爸": dad_phone,
+                                "媽媽": mom_phone, "其他家人": other_phone
+                            }
+                            new_students.append(new_rec)
+                    else:
+                        # 一般 CSV 格式 (欄位名稱需對應)
+                        raw_data = df.to_dict('records')
+                        for r in raw_data:
+                            new_rec = {
+                                "姓名": r.get('姓名', ''),
+                                "年級": r.get('年級', ''),
+                                "班別": r.get('班別', ''),
+                                "學生手機": r.get('學生手機', ''),
+                                "家裡": r.get('家裡', ''),
+                                "爸爸": r.get('爸爸', ''),
+                                "媽媽": r.get('媽媽', ''),
+                                "其他家人": r.get('其他家人', '')
+                            }
+                            # 簡單檢查必填
+                            if new_rec['姓名']:
+                                new_students.append(new_rec)
+
+                    # 儲存
+                    if new_students:
                         current_data = get_students_data_cached()
                         save_students_data(current_data + new_students)
-                        st.success(f"匯入 {len(new_students)} 筆")
-                else: st.error("CSV 格式錯誤")
+                        st.success(f"成功匯入 {len(new_students)} 筆資料！")
+                        st.rerun()
+                    else:
+                        st.warning("未找到有效資料，請檢查欄位名稱。")
+
             except Exception as e: st.error(f"讀取失敗: {e}")
 
         with st.expander("手動新增學生"):
-            # ★ 1. 快速帶入舊生資料選單
             st.caption("💡 若為舊生加新班，可直接選取姓名帶入資料")
             select_existing = st.selectbox("快速帶入舊生資料 (可選)", ["不使用"] + list(student_map.keys()))
             
-            # 設定預設值
             def_name, def_phone, def_grade = "", "", "小一"
             def_home, def_dad, def_mom, def_other = "", "", "", ""
             
@@ -405,15 +471,11 @@ def show_general_management_dialog():
                 def_mom = data.get('媽媽', '')
                 def_other = data.get('其他家人', '')
 
-            # ★ 2. 輸入表單 (移除 st.form 以支援動態更新)
             c1, c2 = st.columns(2)
-            # 這裡使用 value=... 來實現自動填入，key 必須是 dynamic 或者不設
-            # 為了讓 selectbox 改變時能更新，我們不使用 session_state key 綁定，而是依賴 rerender
             ms_name = c1.text_input("學生姓名 (必填)", value=def_name)
             ms_phone = c2.text_input("學生手機", value=def_phone)
             
             c3, c4 = st.columns(2)
-            # 年級選單：如果 def_grade 在選項內就預選，否則預設第一個
             grade_index = GRADE_OPTIONS.index(def_grade) if def_grade in GRADE_OPTIONS else 0
             ms_grade = c3.selectbox("年級 (必填)", GRADE_OPTIONS, index=grade_index)
             
@@ -432,7 +494,6 @@ def show_general_management_dialog():
             ms_other = c8.text_input("其他家人", value=def_other)
             
             if st.button("新增學生資料", type="primary"):
-                # 邏輯檢查
                 contact_filled = any([ms_home, ms_dad, ms_mom, ms_other])
                 
                 if ms_name and ms_grade and ms_class and contact_filled:
@@ -453,22 +514,18 @@ def show_general_management_dialog():
                     else:
                         st.error("缺必填欄位 (姓名、年級、班別)")
 
-        # ★ 3. 表格與刪除邏輯
         st.divider()
         st.caption("學生列表 (可刪除)")
         if current_students:
-            # 調整表格顯示順序
             display_cols = ["姓名", "學生手機", "年級", "班別", "家裡", "爸爸", "媽媽", "其他家人"]
             processed_list = []
             for s in current_students:
-                # 安全獲取欄位，沒有的補空白
                 row = {col: s.get(col, "") for col in display_cols}
                 processed_list.append(row)
                 
             df_stu = pd.DataFrame(processed_list)
             st.dataframe(df_stu, use_container_width=True)
             
-            # 刪除選項：顯示 姓名 (班別)
             delete_options = [f"{s.get('姓名')} ({s.get('班別')})" for s in current_students]
             to_del = st.multiselect("刪除學生", delete_options)
             
@@ -853,7 +910,6 @@ all_students = get_students_data_cached()
 target_students = []
 
 if daily_courses_display:
-    # 顯示包含教室的課程清單
     st.write(f"📅 當日課程：{'、'.join(daily_courses_display)}")
     for stu in all_students:
         # 使用純課程名稱來比對學生班別
