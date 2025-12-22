@@ -19,10 +19,12 @@ st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layo
 # CSS 優化
 st.markdown("""
 <style>
+    /* 讓欄位最小寬度為 0，防止被強制換行 */
     [data-testid="column"] {
         min-width: 0px !important;
         padding: 0px !important;
     }
+    /* 調整 checkbox 樣式 */
     div[data-testid="stCheckbox"] {
         padding-top: 5px;
         min-height: 0px;
@@ -37,6 +39,13 @@ st.markdown("""
     div[data-testid="stMarkdownContainer"] p {
         text-align: center;
         font-weight: bold;
+    }
+    /* 讓按鈕文字置中且不換行 */
+    div[data-testid="stButton"] button {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding: 0.25rem 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -261,6 +270,12 @@ def log_cleaning(area, user):
     db.collection("latest_cleaning_status").document(area).set({"area": area, "staff": user, "timestamp": now})
     st.toast(f"✨ {area} 清潔完成！", icon="🧹")
 
+# ★ 正規化字串函式：移除空白、括號、特殊符號，只留中文字與英數字
+def normalize_string(s):
+    if not isinstance(s, str): return str(s)
+    # 移除 [ ] ( ) 【 】 （ ） 還有空白
+    return re.sub(r'[ \[\]\(\)（）【】\-_\s]', '', s)
+
 # --- 4. 彈出視窗 UI ---
 
 # 登入功能
@@ -270,74 +285,43 @@ def show_login_dialog():
         user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
         password = st.text_input("請輸入密碼", type="password")
         submitted = st.form_submit_button("登入", use_container_width=True)
-        
         if submitted:
-            if user == "請選擇": 
-                st.error("請選擇身份")
+            if user == "請選擇": st.error("請選擇身份")
             else:
-                is_valid = False
-                is_admin = False
-                if user in ADMINS:
-                    if password == ADMIN_PASSWORD:
-                        is_valid = True
-                        is_admin = True
-                else:
-                    if password == STAFF_PASSWORD:
-                        is_valid = True
-                
-                if is_valid:
+                if (user in ADMINS and password == ADMIN_PASSWORD) or (user not in ADMINS and password == STAFF_PASSWORD):
                     st.session_state['user'] = user
-                    st.session_state['is_admin'] = is_admin
+                    st.session_state['is_admin'] = (user in ADMINS)
                     st.rerun()
-                else:
-                    st.error("密碼錯誤")
+                else: st.error("密碼錯誤")
 
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
     if props.get('type') == 'holiday':
-        st.warning("🌴 這是國定假日，無法編輯。")
+        st.warning("🌴 這是國定假日，無法編輯。"); 
         if st.button("關閉"): st.rerun()
         return
-
     st.write(f"正在編輯：**{props.get('title', '')}**")
-    
     if props.get('type') == 'shift':
         new_title = st.text_input("課程名稱", props.get('title'))
-        col1, col2 = st.columns(2)
-        if col1.button("💾 儲存修改", type="primary"):
-            update_event_in_db(event_id, {"title": new_title})
-            st.rerun()
-        if col2.button("🗑️ 刪除此課程", type="secondary"):
-            delete_event_from_db(event_id)
-            st.rerun()
-
+        c1, c2 = st.columns(2)
+        if c1.button("💾 儲存修改", type="primary"): update_event_in_db(event_id, {"title": new_title}); st.rerun()
+        if c2.button("🗑️ 刪除此課程", type="secondary"): delete_event_from_db(event_id); st.rerun()
     elif props.get('type') == 'part_time':
         new_staff = st.text_input("工讀生姓名", props.get('staff'))
-        col1, col2 = st.columns(2)
-        if col1.button("💾 儲存修改", type="primary"):
-            update_event_in_db(event_id, {"staff": new_staff})
-            st.rerun()
-        if col2.button("🗑️ 刪除此班表", type="secondary"):
-            delete_event_from_db(event_id)
-            st.rerun()
-            
+        c1, c2 = st.columns(2)
+        if c1.button("💾 儲存修改", type="primary"): update_event_in_db(event_id, {"staff": new_staff}); st.rerun()
+        if c2.button("🗑️ 刪除此班表", type="secondary"): delete_event_from_db(event_id); st.rerun()
     elif props.get('type') == 'notice':
         cat_opts = ["調課", "考試", "活動", "任務", "其他"]
         curr_cat = props.get('category', '其他')
         idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 4
         new_cat = st.selectbox("分類", cat_opts, index=idx)
         new_content = st.text_area("內容", props.get('title')) 
-        col1, col2 = st.columns(2)
-        if col1.button("💾 儲存修改", type="primary"):
-            update_event_in_db(event_id, {"title": new_content, "category": new_cat})
-            st.rerun()
-        if col2.button("🗑️ 刪除此公告", type="secondary"):
-            delete_event_from_db(event_id)
-            st.rerun()
+        c1, c2 = st.columns(2)
+        if c1.button("💾 儲存修改", type="primary"): update_event_in_db(event_id, {"title": new_content, "category": new_cat}); st.rerun()
+        if c2.button("🗑️ 刪除此公告", type="secondary"): delete_event_from_db(event_id); st.rerun()
     else:
-        if st.button("🗑️ 強制刪除", type="secondary"):
-            delete_event_from_db(event_id)
-            st.rerun()
+        if st.button("🗑️ 強制刪除", type="secondary"): delete_event_from_db(event_id); st.rerun()
 
 @st.dialog("📢 新增公告 / 交接")
 def show_notice_dialog(default_date=None):
@@ -350,637 +334,306 @@ def show_notice_dialog(default_date=None):
         start_dt = datetime.datetime.combine(edit_date, datetime.time(9,0))
         end_dt = datetime.datetime.combine(edit_date, datetime.time(10,0))
         add_event_to_db(notice_content, start_dt, end_dt, "notice", st.session_state['user'], category=category)
-        st.toast("公告已發布")
-        st.rerun()
+        st.toast("公告已發布"); st.rerun()
 
 @st.dialog("📅 回顧點名紀錄")
 def show_roll_call_review_dialog():
     st.info("請選擇要查看或補點名的日期")
     pick_date = st.date_input("選擇日期", value=datetime.date.today())
     if st.button("確認前往", type="primary", use_container_width=True):
-        st.session_state['selected_calendar_date'] = pick_date
-        st.rerun()
+        st.session_state['selected_calendar_date'] = pick_date; st.rerun()
 
 @st.dialog("🎓 確認年度升級")
 def show_promotion_confirm_dialog():
     st.warning("⚠️ **警告：此操作不可逆！**")
-    st.write("這將會把所有學生的年級往上加一級。")
     if st.button("我確定要升級所有學生", type="primary"):
         current_data = get_students_data_cached()
         updated_list = []
         for stu in current_data:
-            new_stu = stu.copy()
-            new_stu['年級'] = promote_student_grade(stu.get('年級', ''))
+            new_stu = stu.copy(); new_stu['年級'] = promote_student_grade(stu.get('年級', ''))
             updated_list.append(new_stu)
-        save_students_data(updated_list)
-        st.success(f"成功升級！")
-        st.rerun()
+        save_students_data(updated_list); st.success("成功升級！"); st.rerun()
 
 @st.dialog("📂 資料管理")
 def show_general_management_dialog():
     tab1, tab2 = st.tabs(["🎓 學生名單", "👷 工讀生名單"])
-    
     current_students = get_students_data_cached()
-    student_map = {}
-    for s in current_students:
-        label = f"{s.get('姓名')} ({s.get('年級', '')})"
-        student_map[label] = s
+    student_map = {f"{s.get('姓名')} ({s.get('年級', '')})": s for s in current_students}
     
     with tab1:
-        st.caption("所有員工皆可編輯")
         if st.session_state['is_admin']:
             if st.button("⬆️ 執行年度升級 (7月)", type="primary"): show_promotion_confirm_dialog()
         
-        uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入 (支援 ERP 格式)", type=['csv', 'xlsx'])
+        uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入", type=['csv', 'xlsx'])
         if uploaded_file:
             try:
-                if uploaded_file.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded_file)
-                else:
-                    df = pd.read_excel(uploaded_file)
-                
+                df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
                 if st.button("確認匯入"):
                     new_students = []
                     is_erp = '聯絡方式' in df.columns and '所屬班級' in df.columns
-                    
                     if is_erp:
                         for index, row in df.iterrows():
                             name = str(row.get('姓名', '')).strip()
                             grade = str(row.get('年級', '')).strip()
                             raw_class_str = str(row.get('所屬班級', '')).strip()
                             class_list = re.split(r'[\n,]+', raw_class_str)
-                            
                             contact_str = str(row.get('聯絡方式', ''))
                             s_phone, dad_phone, mom_phone, home_phone, other_phone = "", "", "", "", ""
-                            lines = contact_str.split('\n')
-                            for line in lines:
+                            for line in contact_str.split('\n'):
                                 line = line.strip()
-                                number_match = re.search(r'\d[\d\-]+', line)
-                                number = number_match.group(0) if number_match else ""
-                                if not number: continue
+                                num_match = re.search(r'\d[\d\-]+', line)
+                                if not num_match: continue
+                                number = num_match.group(0)
                                 if "個人手機" in line: s_phone = number
                                 elif "爸爸" in line: dad_phone = number
                                 elif "媽媽" in line: mom_phone = number
                                 elif "Tel" in line or "家" in line: home_phone = number
-                                else:
-                                    if not other_phone: other_phone = line
-                                    else: other_phone += f", {line}"
-
+                                else: other_phone = (other_phone + f", {line}") if other_phone else line
                             for cls in class_list:
                                 cls = cls.strip()
                                 if not cls: continue
-                                new_rec = {
-                                    "姓名": name, "年級": grade, "班別": cls,
-                                    "學生手機": s_phone,
-                                    "家裡": home_phone, "爸爸": dad_phone,
-                                    "媽媽": mom_phone, "其他家人": other_phone
-                                }
-                                new_students.append(new_rec)
+                                new_students.append({"姓名": name, "年級": grade, "班別": cls, "學生手機": s_phone, "家裡": home_phone, "爸爸": dad_phone, "媽媽": mom_phone, "其他家人": other_phone})
                     else:
-                        raw_data = df.to_dict('records')
-                        for r in raw_data:
+                        for r in df.to_dict('records'):
                             if r.get('姓名'):
-                                cls_str = str(r.get('班別', ''))
-                                cls_list = re.split(r'[\n,]+', cls_str)
-                                for c in cls_list:
-                                    c = c.strip()
-                                    if not c: continue
-                                    new_rec = r.copy()
-                                    new_rec['班別'] = c
-                                    new_students.append(new_rec)
-
+                                for c in re.split(r'[\n,]+', str(r.get('班別', ''))):
+                                    if c.strip(): 
+                                        rec = r.copy(); rec['班別'] = c.strip(); new_students.append(rec)
                     if new_students:
-                        current_data = get_students_data_cached()
-                        save_students_data(current_data + new_students)
-                        st.success(f"成功匯入 {len(new_students)} 筆資料！")
-                        st.rerun()
-                    else:
-                        st.warning("未找到有效資料")
-
-            except Exception as e: st.error(f"讀取失敗: {e}")
+                        save_students_data(get_students_data_cached() + new_students)
+                        st.success(f"成功匯入 {len(new_students)} 筆"); st.rerun()
+            except Exception as e: st.error(f"失敗: {e}")
 
         with st.expander("手動新增學生"):
-            st.caption("💡 若為舊生加新班，可直接選取姓名帶入資料")
-            select_existing = st.selectbox("快速帶入舊生資料 (可選)", ["不使用"] + list(student_map.keys()))
+            select_existing = st.selectbox("快速帶入舊生資料", ["不使用"] + list(student_map.keys()))
+            def_vals = defaultdict(str, student_map[select_existing]) if select_existing != "不使用" else defaultdict(str, {"年級": "小一"})
             
-            def_name, def_phone, def_grade = "", "", "小一"
-            def_home, def_dad, def_mom, def_other = "", "", "", ""
-            
-            if select_existing != "不使用":
-                data = student_map[select_existing]
-                def_name = data.get('姓名', '')
-                def_phone = data.get('學生手機', '')
-                def_grade = data.get('年級', '小一')
-                def_home = data.get('家裡', '')
-                def_dad = data.get('爸爸', '')
-                def_mom = data.get('媽媽', '')
-                def_other = data.get('其他家人', '')
-
             c1, c2 = st.columns(2)
-            ms_name = c1.text_input("學生姓名 (必填)", value=def_name)
-            ms_phone = c2.text_input("學生手機", value=def_phone)
-            
+            ms_name = c1.text_input("姓名", value=def_vals['姓名'])
+            ms_phone = c2.text_input("手機", value=def_vals['學生手機'])
             c3, c4 = st.columns(2)
-            grade_index = GRADE_OPTIONS.index(def_grade) if def_grade in GRADE_OPTIONS else 0
-            ms_grade = c3.selectbox("年級 (必填)", GRADE_OPTIONS, index=grade_index)
-            
-            course_opts = get_unique_course_names()
-            ms_class = c4.selectbox("班別 (必填)", course_opts)
-            
-            st.divider()
-            st.caption("聯絡電話 (至少填寫一項)")
-            
+            idx = GRADE_OPTIONS.index(def_vals['年級']) if def_vals['年級'] in GRADE_OPTIONS else 0
+            ms_grade = c3.selectbox("年級", GRADE_OPTIONS, index=idx)
+            ms_class = c4.selectbox("班別", get_unique_course_names())
+            st.divider(); st.caption("聯絡電話")
             c5, c6 = st.columns(2)
-            ms_home = c5.text_input("家裡", value=def_home)
-            ms_dad = c6.text_input("爸爸", value=def_dad)
-            
+            ms_home = c5.text_input("家裡", value=def_vals['家裡'])
+            ms_dad = c6.text_input("爸爸", value=def_vals['爸爸'])
             c7, c8 = st.columns(2)
-            ms_mom = c7.text_input("媽媽", value=def_mom)
-            ms_other = c8.text_input("其他家人", value=def_other)
+            ms_mom = c7.text_input("媽媽", value=def_vals['媽媽'])
+            ms_other = c8.text_input("其他", value=def_vals['其他家人'])
             
-            if st.button("新增學生資料", type="primary"):
-                contact_filled = any([ms_home, ms_dad, ms_mom, ms_other])
-                
-                if ms_name and ms_grade and ms_class and contact_filled:
-                    new_rec = {
-                        "姓名": ms_name, "學生手機": ms_phone,
-                        "年級": ms_grade, "班別": ms_class,
-                        "家裡": ms_home, "爸爸": ms_dad,
-                        "媽媽": ms_mom, "其他家人": ms_other
-                    }
-                    current = get_students_data_cached()
-                    current.append(new_rec)
-                    save_students_data(current)
-                    st.success(f"已新增：{ms_name} - {ms_class}")
-                    st.rerun()
-                else:
-                    if not contact_filled:
-                        st.error("請至少填寫一個家長/家裡聯絡電話")
-                    else:
-                        st.error("缺必填欄位 (姓名、年級、班別)")
+            if st.button("新增"):
+                if ms_name and ms_grade and ms_class and any([ms_home, ms_dad, ms_mom, ms_other]):
+                    new_rec = {"姓名": ms_name, "年級": ms_grade, "班別": ms_class, "學生手機": ms_phone, "家裡": ms_home, "爸爸": ms_dad, "媽媽": ms_mom, "其他家人": ms_other}
+                    save_students_data(get_students_data_cached() + [new_rec]); st.success("已新增"); st.rerun()
+                else: st.error("缺必填欄位或電話")
 
-        st.divider()
-        st.caption("📝 學生列表 (可直接修改內容，勾選刪除)")
+        st.divider(); st.caption("📝 學生列表 (直接編輯)")
         if current_students:
-            display_cols = ["姓名", "學生手機", "年級", "班別", "家裡", "爸爸", "媽媽", "其他家人"]
-            processed_list = []
-            for s in current_students:
-                row = {col: s.get(col, "") for col in display_cols}
-                row["_id"] = f"{s.get('姓名')}_{s.get('班別')}"
-                processed_list.append(row)
-                
-            df_stu = pd.DataFrame(processed_list)
-            
-            edited_df = st.data_editor(
-                df_stu,
-                use_container_width=True,
-                num_rows="dynamic",
-                key="student_editor",
-                column_config={
-                    "_id": None
-                }
-            )
-            
-            if st.button("💾 儲存修改 (含刪除)", type="primary"):
-                new_data = edited_df.fillna("").to_dict('records')
-                final_data = []
-                for r in new_data:
-                    if "_id" in r: del r["_id"]
-                    if r.get("姓名"):
-                        final_data.append(r)
-                
-                save_students_data(final_data)
-                st.success("資料已更新！")
-                st.rerun()
+            df_stu = pd.DataFrame([{col: s.get(col, "") for col in ["姓名", "學生手機", "年級", "班別", "家裡", "爸爸", "媽媽", "其他家人"]} for s in current_students])
+            df_stu["_id"] = [f"{s.get('姓名')}_{s.get('班別')}" for s in current_students]
+            edited_df = st.data_editor(df_stu, use_container_width=True, num_rows="dynamic", column_config={"_id": None}, key="stu_edit")
+            if st.button("💾 儲存修改"):
+                clean_data = [r for r in edited_df.fillna("").to_dict('records') if r.get("姓名") and del r["_id"] is None]
+                save_students_data(clean_data); st.success("已更新"); st.rerun()
 
     with tab2:
-        st.caption("工讀生名單管理")
         current_pts = get_part_timers_list_cached()
         c_p1, c_p2 = st.columns([2, 1])
-        new_pt = c_p1.text_input("輸入新工讀生姓名")
-        if c_p2.button("新增工讀生"):
-            if new_pt and new_pt not in current_pts:
-                current_pts.append(new_pt); save_part_timers_list(current_pts); st.rerun()
-        pts_to_del = st.multiselect("刪除工讀生", current_pts)
-        if pts_to_del and st.button("確認刪除工讀生"):
-            save_part_timers_list([p for p in current_pts if p not in pts_to_del])
-            st.rerun()
+        new_pt = c_p1.text_input("輸入新工讀生")
+        if c_p2.button("新增"):
+            if new_pt and new_pt not in current_pts: save_part_timers_list(current_pts + [new_pt]); st.rerun()
+        pts_del = st.multiselect("刪除", current_pts)
+        if pts_del and st.button("確認刪除"): save_part_timers_list([p for p in current_pts if p not in pts_del]); st.rerun()
 
 @st.dialog("⚙️ 管理員後台")
 def show_admin_dialog():
-    tab1, tab2, tab3, tab4 = st.tabs(["📅 智慧排課", "👷 工讀排班", "💰 薪資", "🗑️ 資料管理"])
-    
+    tab1, tab2, tab3, tab4 = st.tabs(["📅 排課", "👷 工讀", "💰 薪資", "🗑️ 管理"])
     with tab1:
-        st.subheader("老師課程安排")
         c1, c2 = st.columns(2)
-        start_date = c1.date_input("首堂課日期")
-        weeks_count = c2.number_input("排課週數", min_value=1, value=12)
-        
-        teachers_cfg = get_teachers_data()
-        teacher_names = list(teachers_cfg.keys()) + ADMINS
-        s_teacher = st.selectbox("授課師資", ["請選擇"] + list(set(teacher_names)))
+        start_date = c1.date_input("首堂日期"); weeks = c2.number_input("週數", 1, 12, 12)
+        s_teacher = st.selectbox("師資", ["請選擇"] + list(set(list(get_teachers_data().keys()) + ADMINS)))
         c3, c4 = st.columns(2)
-        t_start_str = c3.selectbox("開始時間", TIME_OPTIONS, index=18)
-        t_end_str = c4.selectbox("結束時間", TIME_OPTIONS, index=24)
-        course_options = get_unique_course_names()
-        s_course_name = st.selectbox("課程/班別", course_options + ["+ 新增班別..."])
-        if s_course_name == "+ 新增班別...": s_course_name = st.text_input("輸入新班別名稱")
-        s_location = st.selectbox("教室", ["大教室", "小教室", "流放教室", "線上"])
-        
-        if "preview_schedule" not in st.session_state: st.session_state['preview_schedule'] = None
-        if st.button("🔍 檢查時段與假日", key="check_shift"):
-            if s_teacher == "請選擇": st.error("請選擇師資")
+        t_start = datetime.datetime.strptime(c3.selectbox("開始", TIME_OPTIONS, index=18), "%H:%M").time()
+        t_end = datetime.datetime.strptime(c4.selectbox("結束", TIME_OPTIONS, index=24), "%H:%M").time()
+        c_name = st.selectbox("班別", get_unique_course_names() + ["+ 新增"])
+        if c_name == "+ 新增": c_name = st.text_input("新班別名稱")
+        loc = st.selectbox("教室", ["大教室", "小教室", "流放教室", "線上"])
+        if st.button("🔍 檢查"):
+            if s_teacher == "請選擇": st.error("請選師資")
             else:
-                save_course_name(s_course_name)
-                preview = []
-                year = start_date.year
+                save_course_name(c_name); preview = []
                 holidays = {}
-                try:
-                    resp = requests.get(f"https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json").json()
-                    for d in resp:
-                        if d['isHoliday']: holidays[d['date']] = d['description']
+                try: holidays = {d['date']: d['description'] for d in requests.get(f"https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{start_date.year}.json").json() if d['isHoliday']}
                 except: pass
-                t_start = datetime.datetime.strptime(t_start_str, "%H:%M").time()
-                t_end = datetime.datetime.strptime(t_end_str, "%H:%M").time()
-                for i in range(weeks_count):
-                    current_date = start_date + datetime.timedelta(weeks=i)
-                    d_str = current_date.strftime("%Y%m%d")
-                    preview.append({
-                        "date": current_date,
-                        "start_dt": datetime.datetime.combine(current_date, t_start),
-                        "end_dt": datetime.datetime.combine(current_date, t_end),
-                        "conflict": d_str in holidays,
-                        "reason": holidays.get(d_str, ""),
-                        "selected": not (d_str in holidays)
-                    })
-                st.session_state['preview_schedule'] = preview
-        if st.session_state['preview_schedule']:
-            st.divider()
-            final_schedule = []
-            for idx, item in enumerate(st.session_state['preview_schedule']):
-                label = f"第 {idx+1} 堂: {item['date']}"
-                if item['conflict']: label += f" ⚠️ {item['reason']}"
-                if st.checkbox(label, value=item['selected'], key=f"sch_{idx}"):
-                    final_schedule.append(item)
-            if st.button(f"確認排入 {len(final_schedule)} 堂課", type="primary"):
-                for item in final_schedule:
-                    add_event_to_db(s_course_name, item['start_dt'], item['end_dt'], "shift", st.session_state['user'], s_location, s_teacher)
-                st.success("排課成功！")
-                st.session_state['preview_schedule'] = None
-                st.rerun()
+                for i in range(weeks):
+                    d = start_date + datetime.timedelta(weeks=i); d_str = d.strftime("%Y%m%d")
+                    preview.append({"date": d, "s": datetime.datetime.combine(d, t_start), "e": datetime.datetime.combine(d, t_end), "cf": d_str in holidays, "r": holidays.get(d_str, "")})
+                st.session_state['preview'] = preview
+        if st.session_state.get('preview'):
+            final = []
+            for i, item in enumerate(st.session_state['preview']):
+                if st.checkbox(f"{item['date']} {('⚠️'+item['r']) if item['cf'] else ''}", value=not item['cf'], key=f"sch_{i}"): final.append(item)
+            if st.button(f"排入 {len(final)} 堂"):
+                for it in final: add_event_to_db(c_name, it['s'], it['e'], "shift", st.session_state['user'], loc, s_teacher)
+                st.success("成功"); st.session_state['preview'] = None; st.rerun()
 
-    # 工讀生排班：分週次表格 (週曆模式)
     with tab2:
-        st.subheader("👷 工讀生排班系統")
-        st.caption("請選擇工讀生與月份，然後直接在表格中勾選。")
-        part_timers_list = get_part_timers_list_cached()
-        c_pt1, c_pt2 = st.columns(2)
-        pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
-        c_y, c_m = c_pt2.columns(2)
-        pt_year = c_y.number_input("年份", value=datetime.date.today().year, key="pt_year")
-        pt_month = c_m.number_input("月份", value=datetime.date.today().month, min_value=1, max_value=12, key="pt_month")
-        c_t1, c_t2 = st.columns(2)
-        pt_start = c_t1.selectbox("上班時間", TIME_OPTIONS, index=18, key="pt_start")
-        pt_end = c_t2.selectbox("下班時間", TIME_OPTIONS, index=24, key="pt_end")
-        
-        st.divider()
-        st.write(f"請勾選 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的上班日：")
-        
-        cols = st.columns(7)
-        weekdays = ["日", "一", "二", "三", "四", "五", "六"] 
-        for idx, w in enumerate(weekdays):
-            cols[idx].markdown(f"**{w}**")
-            
-        num_days = py_calendar.monthrange(pt_year, pt_month)[1]
-        all_dates = [datetime.date(pt_year, pt_month, d) for d in range(1, num_days + 1)]
-        
-        weeks = []
-        current_week = []
-        first_day_weekday = all_dates[0].weekday() 
-        start_padding = (first_day_weekday + 1) % 7
-        for _ in range(start_padding):
-            current_week.append(None)
-            
-        for d in all_dates:
-            current_week.append(d)
-            if len(current_week) == 7:
-                weeks.append(current_week)
-                current_week = []
-        
-        if current_week:
-            while len(current_week) < 7:
-                current_week.append(None)
-            weeks.append(current_week)
-            
-        selected_dates_from_table = []
-        
-        for w_idx, week_dates in enumerate(weeks):
-            col_names = [f"c{i}" for i in range(7)]
-            row_data = {}
-            col_config = {}
-            date_map = {}
-            
-            for i, d in enumerate(week_dates):
-                col_key = col_names[i]
-                if d:
-                    col_config[col_key] = st.column_config.CheckboxColumn(label=str(d.day), required=True)
-                    row_data[col_key] = False
-                    date_map[col_key] = d
-                else:
-                    col_config[col_key] = st.column_config.Column(label=" ", disabled=True)
-                    row_data[col_key] = False 
-            
-            df_week = pd.DataFrame([row_data]) 
-            edited_week = st.data_editor(
-                df_week,
-                column_config=col_config,
-                hide_index=True,
-                use_container_width=True,
-                key=f"week_grid_{w_idx}"
-            )
-            
-            for col in edited_week.columns:
-                if col in date_map and edited_week[col][0]:
-                    selected_dates_from_table.append(date_map[col])
-        
-        st.divider()
-        
-        if st.button(f"確認排入選取班次", type="primary", key="save_pt_table"):
-            if not selected_dates_from_table:
-                st.error("未勾選任何日期")
-            else:
-                t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
-                t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
-                count = 0
-                for date_obj in selected_dates_from_table:
-                    start_dt = datetime.datetime.combine(date_obj, t_s)
-                    end_dt = datetime.datetime.combine(date_obj, t_e)
-                    add_event_to_db("工讀", start_dt, end_dt, "part_time", st.session_state['user'], staff=pt_name)
-                    count += 1
-                st.success(f"成功新增 {count} 筆工讀班表！")
-                st.rerun()
+        pts = get_part_timers_list_cached()
+        c1, c2 = st.columns(2)
+        pt = c1.selectbox("工讀生", pts)
+        y = c2.number_input("年", value=datetime.date.today().year); m = c2.number_input("月", 1, 12, datetime.date.today().month)
+        c3, c4 = st.columns(2)
+        ts = datetime.datetime.strptime(c3.selectbox("上班", TIME_OPTIONS, index=18), "%H:%M").time()
+        te = datetime.datetime.strptime(c4.selectbox("下班", TIME_OPTIONS, index=24), "%H:%M").time()
+        st.divider(); cols = st.columns(7)
+        for w in ["日","一","二","三","四","五","六"]: cols[list(["日","一","二","三","四","五","六"]).index(w)].markdown(f"**{w}**")
+        dates = [datetime.date(y, m, d) for d in range(1, py_calendar.monthrange(y, m)[1]+1)]
+        weeks, curr = [], [None]*((dates[0].weekday()+1)%7)
+        for d in dates:
+            curr.append(d)
+            if len(curr)==7: weeks.append(curr); curr=[]
+        if curr: weeks.append(curr + [None]*(7-len(curr)))
+        sel_dates = []
+        for w_idx, wk in enumerate(weeks):
+            cols = st.columns(7)
+            for i, d in enumerate(wk):
+                if d and cols[i].checkbox(f"{d.day}", key=f"pt_{w_idx}_{i}"): sel_dates.append(d)
+        if st.button("排入班表"):
+            for d in sel_dates: add_event_to_db("工讀", datetime.datetime.combine(d, ts), datetime.datetime.combine(d, te), "part_time", st.session_state['user'], staff=pt)
+            st.success("成功"); st.rerun()
 
     with tab3:
-        st.subheader("👨‍🏫 師資薪資設定")
-        with st.form("add_teacher"):
-            c_t1, c_t2 = st.columns([2, 1])
-            new_t_name = c_t1.text_input("老師姓名 (輸入現有姓名即為修改)")
-            new_t_rate = c_t2.number_input("單堂薪資", min_value=0, step=50)
-            if st.form_submit_button("新增 / 更新"):
-                if new_t_name:
-                    save_teacher_data(new_t_name, new_t_rate)
-                    st.rerun()
-        
-        teachers_cfg = get_teachers_data()
-        if teachers_cfg:
-            with st.expander("查看目前師資與薪資列表"):
-                t_list = [{"姓名": k, "單價": v.get('rate', 0)} for k, v in teachers_cfg.items()]
-                st.dataframe(t_list)
-
+        with st.form("add_t"):
+            c1, c2 = st.columns([2,1])
+            tn = c1.text_input("姓名"); tr = c2.number_input("薪資", step=50)
+            if st.form_submit_button("更新"): save_teacher_data(tn, tr); st.rerun()
+        rates = get_teachers_data()
+        if rates: st.dataframe([{"姓名":k, "單價":v['rate']} for k,v in rates.items()])
         st.divider()
-        st.subheader("📊 薪資結算報告")
-        col_m1, col_m2 = st.columns(2)
-        q_year = col_m1.number_input("年份", value=datetime.date.today().year, key="sal_y")
-        q_month = col_m2.number_input("月份", value=datetime.date.today().month, min_value=1, max_value=12, key="sal_m")
-        if st.button("計算本月薪資"):
-            start_date = datetime.datetime(q_year, q_month, 1)
-            end_date = start_date + relativedelta(months=1)
-            start_str = start_date.isoformat(); end_str = end_date.isoformat()
-            docs = db.collection("shifts").where("type", "==", "shift")\
-                     .where("start", ">=", start_str).where("start", "<", end_str).stream()
-            teachers_cfg = get_teachers_data()
-            report = {}
-            for doc in docs:
-                d = doc.to_dict(); t_name = d.get("teacher", "未知")
-                if t_name in ADMINS or t_name == "未知": continue
-                if t_name not in report: report[t_name] = {"count": 0, "rate": teachers_cfg.get(t_name, {}).get("rate", 0)}
-                report[t_name]["count"] += 1
-            res = []
-            for name, info in report.items():
-                res.append({"姓名": name, "單價": info["rate"], "堂數": info["count"], "應發": info["count"]*info["rate"]})
-            if res: st.dataframe(res, use_container_width=True)
-            else: st.info("無紀錄")
+        c1, c2 = st.columns(2)
+        y = c1.number_input("年", value=datetime.date.today().year, key="sy"); m = c2.number_input("月", 1, 12, datetime.date.today().month, key="sm")
+        if st.button("計算"):
+            s = datetime.datetime(y, m, 1); e = s + relativedelta(months=1)
+            docs = db.collection("shifts").where("type","==","shift").where("start",">=",s.isoformat()).where("start","<",e.isoformat()).stream()
+            rep = defaultdict(int)
+            for d in docs: 
+                t = d.to_dict().get("teacher")
+                if t not in ADMINS: rep[t] += 1
+            st.dataframe([{"姓名":k, "堂數":v, "應發": v*rates.get(k,{}).get('rate',0)} for k,v in rep.items()])
 
     with tab4:
-        st.subheader("🗑️ 資料庫強制管理")
-        all_docs = db.collection("shifts").order_by("start", direction=firestore.Query.DESCENDING).stream()
-        data_list = []
-        for doc in all_docs:
-            d = doc.to_dict(); d['id'] = doc.id; data_list.append(d)
-        if data_list:
-            event_map = {f"{item.get('start')[:10]} | {item.get('title')} ({item.get('staff')})": item['id'] for item in data_list}
-            selected_labels = st.multiselect("選擇刪除項目", list(event_map.keys()))
-            if selected_labels and st.button("🗑️ 確認刪除"):
-                batch_delete_events([event_map[l] for l in selected_labels])
-                st.rerun()
+        docs = list(db.collection("shifts").order_by("start", direction=firestore.Query.DESCENDING).stream())
+        if docs:
+            opts = {f"{d.to_dict()['start'][:10]} {d.to_dict()['title']} ({d.to_dict().get('staff')})": d.id for d in docs}
+            sels = st.multiselect("刪除", list(opts.keys()))
+            if sels and st.button("確認刪除"): batch_delete_events([opts[s] for s in sels]); st.rerun()
 
-# --- 5. 主介面邏輯 ---
+# --- 5. 主介面 ---
+tz = pytz.timezone('Asia/Taipei'); now = datetime.datetime.now(tz)
+if now.hour == 6 and now.minute <= 30 and st.session_state['user']: st.session_state['user']=None; st.rerun()
 
-tz = pytz.timezone('Asia/Taipei')
-now = datetime.datetime.now(tz)
-
-# 自動登出：僅在凌晨 06:00 ~ 06:30 之間
-if now.hour == 6 and now.minute <= 30 and st.session_state['user'] is not None:
-    st.session_state['user'] = None; st.session_state['is_admin'] = False; st.rerun()
-
-# 如果未登入，顯示登入區塊
-if st.session_state['user'] is None:
+if not st.session_state['user']:
     st.title("🏫 鳩特數理行政班表")
-    st.info("請先登入以使用系統")
-    
-    with st.form("main_login_form"):
-        user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
-        password = st.text_input("請輸入密碼", type="password")
-        if st.form_submit_button("登入", use_container_width=True):
-            if user == "請選擇":
-                st.error("請選擇身份")
-            else:
-                is_valid = False
-                is_admin = False
-                if user in ADMINS:
-                    if password == ADMIN_PASSWORD:
-                        is_valid = True
-                        is_admin = True
-                else:
-                    if password == STAFF_PASSWORD:
-                        is_valid = True
-                
-                if is_valid:
-                    st.session_state['user'] = user
-                    st.session_state['is_admin'] = is_admin
-                    st.rerun()
-                else:
-                    st.error("密碼錯誤")
-    st.stop() # 停止執行
+    with st.form("login"):
+        u = st.selectbox("身份", ["請選擇"]+LOGIN_LIST)
+        p = st.text_input("密碼", type="password")
+        if st.form_submit_button("登入"):
+            if (u in ADMINS and p==ADMIN_PASSWORD) or (u not in ADMINS and p==STAFF_PASSWORD):
+                st.session_state['user']=u; st.session_state['is_admin']=(u in ADMINS); st.rerun()
+            else: st.error("錯誤")
+    st.stop()
 
-# 登入後顯示的內容
-col_title, col_login = st.columns([3, 1], vertical_alignment="center")
-with col_title: st.title("🏫 鳩特數理行政班表")
-with col_login:
-    st.markdown(f"👤 **{st.session_state['user']}**")
-    if st.button("登出", type="secondary", use_container_width=True):
-        st.session_state['user'] = None; st.session_state['is_admin'] = False; st.rerun()
-
+c1, c2 = st.columns([3, 1], vertical_alignment="center")
+c1.title("🏫 鳩特數理行政班表"); c2.markdown(f"👤 **{st.session_state['user']}**")
+if c2.button("登出"): st.session_state['user']=None; st.rerun()
 st.divider()
 
-clean_cols = st.columns(4)
-areas = ["櫃檯茶水間", "大教室", "小教室", "流放教室"]
-for i, area in enumerate(areas):
-    status = get_cleaning_status(area)
-    days_diff = "N/A"; delta_days = 999; last_cleaner = "無紀錄"
-    if status:
-        try:
-            ts = status['timestamp']
-            if isinstance(ts, str): ts = datetime.datetime.fromisoformat(ts)
-            if ts.tzinfo: ts = ts.replace(tzinfo=None)
-            delta_days = (datetime.datetime.now() - ts).days
-            days_diff = f"{delta_days} 天"; last_cleaner = status.get('staff', '未知')
-        except: pass
-    color = "green" if delta_days <= 3 else "orange" if delta_days <= 6 else "red"
-    with clean_cols[i]:
-        st.caption(area)
-        st.markdown(f"### :{color}[{days_diff}]")
-        st.caption(f"最後打掃：{last_cleaner}")
-        if st.button("已清潔", key=f"clean_{i}", use_container_width=True):
-            if st.session_state['user']: log_cleaning(area, st.session_state['user']); st.rerun()
-            else: st.error("請先登入")
-
+cols = st.columns(4)
+for i, area in enumerate(["櫃檯茶水間", "大教室", "小教室", "流放教室"]):
+    stat = get_cleaning_status(area)
+    diff = (datetime.datetime.now() - datetime.datetime.fromisoformat(stat['timestamp'])).days if stat else 999
+    clr = "green" if diff<=3 else "orange" if diff<=6 else "red"
+    with cols[i]:
+        st.markdown(f"{area} ### :{clr}[{diff}天]"); st.caption(f"上次: {stat.get('staff','無') if stat else '無'}")
+        if st.button("已清潔", key=f"cl_{i}"): log_cleaning(area, st.session_state['user']); st.rerun()
 st.divider()
 
-if st.session_state['user']:
-    if st.button("📂 資料管理", type="secondary", use_container_width=True): show_general_management_dialog()
-    if st.session_state['is_admin']:
-        if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
+if st.button("📂 資料管理"): show_general_management_dialog()
+if st.session_state['is_admin'] and st.button("⚙️ 後台"): show_admin_dialog()
 
-all_events = get_all_events_cached()
-calendar_options = {
-    "editable": True, 
-    "headerToolbar": { "left": "today prev,next", "center": "title", "right": "listMonth,dayGridMonth" },
-    "initialView": "dayGridMonth", 
-    "height": "650px", "locale": "zh-tw",
-    "titleFormat": {"year": "numeric", "month": "long"},
-    "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
-    "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
-    "views": { "dayGridMonth": {"displayEventTime": False}, "listMonth": {"displayEventTime": True} },
-    "selectable": True,
-}
-cal = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
+cal = calendar(events=get_all_events_cached(), options={"initialView": "dayGridMonth", "headerToolbar": {"left": "today prev,next", "center": "title", "right": "dayGridMonth,listMonth"}, "height": "650px", "locale": "zh-tw"}, callbacks=['dateClick', 'eventClick'])
+if cal.get("dateClick"): 
+    d = cal["dateClick"]["date"].split('T')[0]
+    show_notice_dialog(datetime.datetime.strptime(d, "%Y-%m-%d").date())
+if cal.get("eventClick"): show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# 點擊日期：只開公告
-if cal.get("dateClick"):
-    clicked = cal["dateClick"]["date"]
-    try:
-        if "T" in clicked:
-            if clicked.endswith("Z"): clicked = clicked.replace("Z", "+00:00")
-            dt_utc = datetime.datetime.fromisoformat(clicked)
-            if dt_utc.tzinfo is None: dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
-            d_obj = dt_utc.astimezone(pytz.timezone('Asia/Taipei')).date()
-        else: d_obj = datetime.datetime.strptime(clicked, "%Y-%m-%d").date()
-        
-        if st.session_state['user']: show_notice_dialog(default_date=d_obj)
-    except: pass
+st.divider(); st.subheader("📋 每日點名")
+if st.button("📅 切換日期"): show_roll_call_review_dialog()
 
-if cal.get("eventClick"):
-    if st.session_state['user']:
-        show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
+sel_date = st.session_state.get('selected_calendar_date', datetime.date.today())
+st.info(f"檢視：**{sel_date}**")
+d_key = sel_date.isoformat()
+db_rec = get_roll_call_from_db(d_key)
 
-# --- 6. 智慧點名系統 ---
-st.divider()
-st.subheader("📋 每日點名")
+# ★ 修正重點：超級模糊比對 + Debug 模式
+courses_show = []
+courses_filter = []
+for e in get_all_events_cached():
+    if e['start'].startswith(d_key) and e['extendedProps'].get('type') == 'shift':
+        t = e['extendedProps'].get('title', '')
+        courses_filter.append(normalize_string(t))
+        courses_show.append(t + (f" ({e['extendedProps']['location']})" if e['extendedProps'].get('location') else ""))
 
-# ★ 回顧點名按鈕移到這裡
-if st.button("📅 切換/回顧點名日期", type="primary", use_container_width=True):
-    show_roll_call_review_dialog()
+# 顯示 Debug 資訊
+with st.expander("🕵️‍♂️ 偵錯模式 (看不到學生請點我)"):
+    st.write(f"系統判定今日課程 (正規化後)：{courses_filter}")
+    st.write("---")
+    st.write("班級比對失敗的學生：")
+    for s in get_students_data_cached():
+        s_cls = normalize_string(s.get('班別', ''))
+        matched = False
+        for c in courses_filter:
+            if c in s_cls or s_cls in c: matched = True
+        if not matched and s_cls: # 只列出有班級但沒對上的
+             st.caption(f"{s['姓名']} (班級: {s.get('班別')}) -> 正規化: {s_cls}")
 
-# 決定日期
-if 'selected_calendar_date' in st.session_state:
-    selected_date = st.session_state['selected_calendar_date']
-else:
-    selected_date = datetime.date.today()
+targets = []
+if courses_show:
+    st.write(f"📅 課程：{'、'.join(courses_show)}")
+    for s in get_students_data_cached():
+        s_cls = normalize_string(s.get('班別', ''))
+        for c in courses_filter:
+            if (c in s_cls) or (s_cls in c):
+                targets.append(s['姓名']); break
+else: st.write("無課程")
 
-st.info(f"正在檢視：**{selected_date}** 的點名紀錄")
-date_key = selected_date.isoformat()
-db_record = get_roll_call_from_db(date_key)
+targets = list(set(targets))
+curr = db_rec if db_rec else {"absent": targets, "present": [], "leave": []}
 
-# ★ 修正重點：拆分顯示清單與比對清單
-daily_courses_display = []
-daily_courses_filter = []
-
-for e in all_events:
-    if e.get('start', '').startswith(date_key) and e.get('extendedProps', {}).get('type') == 'shift':
-        props = e.get('extendedProps', {})
-        c_title = props.get('title', '')
-        c_loc = props.get('location', '')
-        
-        daily_courses_filter.append(c_title)
-        
-        if c_loc:
-            daily_courses_display.append(f"{c_title} ({c_loc})")
-        else:
-            daily_courses_display.append(c_title)
-
-all_students = get_students_data_cached()
-target_students = []
-
-# ★ 超級寬鬆比對邏輯：移除所有空白後，雙向包含檢查
-if daily_courses_display:
-    st.write(f"📅 當日課程：{'、'.join(daily_courses_display)}")
-    for stu in all_students:
-        raw_class = str(stu.get('班別', ''))
-        # 移除空白，方便比對 (例如 "高一 數學" == "高一數學")
-        clean_class = raw_class.replace(" ", "")
-        
-        for course in daily_courses_filter:
-            clean_course = str(course).replace(" ", "")
-            # 雙向比對： 排課名稱在學生班級裡 OR 學生班級在排課名稱裡
-            if (clean_course in clean_class) or (clean_class in clean_course):
-                target_students.append(stu['姓名'])
-                break # 只要對到一堂課就加入，不用重複加
-else:
-    st.write("📅 當日無排課紀錄")
-
-target_students = list(set(target_students))
-
-if db_record:
-    current_data = db_record
-else:
-    current_data = {"absent": target_students, "present": [], "leave": []}
-
-def update_status_and_save(student_name, from_list, to_list):
-    current_data[from_list].remove(student_name)
-    current_data[to_list].append(student_name)
-    save_data = {
-        "absent": current_data['absent'], "present": current_data['present'], "leave": current_data['leave'],
-        "updated_at": datetime.datetime.now().isoformat(), "updated_by": st.session_state['user']
-    }
-    save_roll_call_to_db(date_key, save_data)
+def upd(n, f, t):
+    curr[f].remove(n); curr[t].append(n)
+    save_roll_call_to_db(d_key, {"absent": curr['absent'], "present": curr['present'], "leave": curr['leave'], "updated_at": datetime.datetime.now().isoformat(), "updated_by": st.session_state['user']})
     st.rerun()
 
-if st.session_state['user']:
-    if not current_data['absent'] and not current_data['present'] and not current_data['leave']:
-        st.info("無須點名")
-    else:
-        if st.button("🔄 刷新數據 (同步最新狀態)", use_container_width=True): st.rerun()
-        with st.expander("點名表單", expanded=True):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown("### 🔴 未到")
-                if current_data['absent']:
-                    cols = st.columns(4)
-                    for i, s in enumerate(current_data['absent']):
-                        if cols[i%4].button(s, key=f"ab_{s}_{date_key}"):
-                            update_status_and_save(s, "absent", "present")
-            with c2:
-                st.markdown("### 🟢 已到")
-                for s in current_data['present']:
-                    if st.button(f"✅ {s}", key=f"pr_{s}_{date_key}", type="primary", use_container_width=True):
-                        update_status_and_save(s, "present", "absent")
-            with c3:
-                st.markdown("### 🟡 請假")
-                val = st.selectbox("請假", ["選擇..."] + current_data['absent'], key=f"lv_{date_key}")
-                if val != "選擇...": update_status_and_save(val, "absent", "leave")
-                for s in current_data['leave']:
-                    if st.button(f"🤒 {s}", key=f"le_{s}_{date_key}", use_container_width=True):
-                        update_status_and_save(s, "leave", "absent")
+if not curr['absent'] and not curr['present'] and not curr['leave']: st.info("無須點名")
 else:
-    st.warning("請登入以進行點名")
+    if st.button("🔄 刷新"): st.rerun()
+    with st.expander("點名表", expanded=True):
+        st.markdown("### 🔴 未到")
+        if curr['absent']:
+            cols = st.columns(4)
+            for i, s in enumerate(curr['absent']): cols[i%4].button(s, key=f"ab_{s}", on_click=upd, args=(s, "absent", "present"))
+        
+        st.markdown("### 🟢 已到") # 改成 4 欄網格
+        if curr['present']:
+            cols = st.columns(4)
+            for i, s in enumerate(curr['present']): cols[i%4].button(f"✅ {s}", key=f"pr_{s}", type="primary", on_click=upd, args=(s, "present", "absent"))
+            
+        st.markdown("### 🟡 請假") # 下拉選單 + 4 欄網格顯示已請假者
+        l_who = st.selectbox("選擇請假", ["選擇..."]+curr['absent'], key='lv_sel')
+        if l_who != "選擇...": upd(l_who, "absent", "leave")
+        if curr['leave']:
+            cols = st.columns(4)
+            for i, s in enumerate(curr['leave']): cols[i%4].button(f"🤒 {s}", key=f"le_{s}", on_click=upd, args=(s, "leave", "absent"))
