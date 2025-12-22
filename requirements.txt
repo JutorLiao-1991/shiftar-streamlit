@@ -2,3 +2,5 @@ streamlit
 streamlit-calendar
 firebase-admin
 requests
+pandas
+openpyxl
