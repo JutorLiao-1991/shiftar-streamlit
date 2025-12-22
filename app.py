@@ -402,7 +402,6 @@ def show_general_management_dialog():
                 else: st.error("CSV 格式錯誤")
             except Exception as e: st.error(f"讀取失敗: {e}")
 
-        # ★ 學生表單大改版：依照需求排序與欄位檢查
         with st.expander("手動新增學生"):
             with st.form("manual_student"):
                 # 第一排：姓名、學生手機
@@ -464,12 +463,11 @@ def show_general_management_dialog():
             df_stu = pd.DataFrame(processed_list)
             st.dataframe(df_stu, use_container_width=True)
             
-            # ★ 刪除邏輯優化：顯示「姓名 (班別)」，支援多班級學生刪除
+            # 刪除邏輯優化
             delete_options = [f"{s.get('姓名')} ({s.get('班別')})" for s in current_students]
             to_del = st.multiselect("刪除學生", delete_options)
             
             if to_del and st.button("確認刪除"):
-                # 解析選擇的項目，過濾掉要刪除的
                 new_list = []
                 for s in current_students:
                     label = f"{s.get('姓名')} ({s.get('班別')})"
@@ -790,6 +788,7 @@ calendar_options = {
 }
 cal = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
+# 點擊日期：只開公告
 if cal.get("dateClick"):
     clicked = cal["dateClick"]["date"]
     try:
@@ -825,18 +824,37 @@ st.info(f"正在檢視：**{selected_date}** 的點名紀錄")
 date_key = selected_date.isoformat()
 db_record = get_roll_call_from_db(date_key)
 
-daily_courses = []
+# ★ 修正重點：拆分顯示清單與比對清單
+daily_courses_display = []
+daily_courses_filter = []
+
 for e in all_events:
     if e.get('start', '').startswith(date_key) and e.get('extendedProps', {}).get('type') == 'shift':
-        daily_courses.append(e.get('extendedProps', {}).get('title', ''))
+        props = e.get('extendedProps', {})
+        c_title = props.get('title', '')
+        c_loc = props.get('location', '')
+        
+        # 存入比對用的純課程名稱
+        daily_courses_filter.append(c_title)
+        
+        # 存入顯示用的完整名稱 (含教室)
+        if c_loc:
+            daily_courses_display.append(f"{c_title} ({c_loc})")
+        else:
+            daily_courses_display.append(c_title)
 
 all_students = get_students_data_cached()
 target_students = []
-if daily_courses:
-    st.write(f"📅 當日課程：{'、'.join(daily_courses)}")
+
+if daily_courses_display:
+    # 顯示包含教室的課程清單
+    st.write(f"📅 當日課程：{'、'.join(daily_courses_display)}")
     for stu in all_students:
-        if stu.get('班別') in daily_courses: target_students.append(stu['姓名'])
-else: st.write("📅 當日無排課紀錄")
+        # 使用純課程名稱來比對學生班別
+        if stu.get('班別') in daily_courses_filter:
+            target_students.append(stu['姓名'])
+else:
+    st.write("📅 當日無排課紀錄")
 
 # ★ 修復重複學生 Bug：使用 set 去除重複姓名
 target_students = list(set(target_students))
