@@ -367,26 +367,120 @@ def show_general_management_dialog():
         # 這裡會覆蓋重複姓名，但對於「帶入資料」來說，取最後一筆通常沒問題
         student_map[label] = s
     
-    with tab1:
-        st.caption("所有員工皆可編輯")
-        if st.session_state['is_admin']:
-            if st.button("⬆️ 執行年度升級 (7月)", type="primary"): show_promotion_confirm_dialog()
+with tab1:
+        st.caption("🎓 學生名單管理 (含智慧匯入)")
         
-        uploaded_file = st.file_uploader("📂 從 Excel/CSV 匯入", type=['csv'])
-        if uploaded_file:
-            try:
-                df = pd.read_csv(uploaded_file)
-                if all(col in df.columns for col in ["姓名", "年級", "班別", "聯絡人1", "電話1"]):
-                    if st.button("確認匯入"):
-                        new_students = df.to_dict('records')
-                        new_students = [{k: (v if pd.notna(v) else "") for k, v in r.items()} for r in new_students]
+        # --- 1. 智慧匯入區塊 (Sandbox) ---
+        with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=False):
+            st.info("💡 這裡可以處理「多課程擠同一格」與「多電話擠同一格」的舊系統檔案。")
+            uploaded_file = st.file_uploader("上傳原始 CSV 檔", type=['csv'])
+            
+            if uploaded_file:
+                try:
+                    # 嘗試讀取 CSV (處理可能的編碼問題)
+                    try:
+                        df_raw = pd.read_csv(uploaded_file, encoding='utf-8')
+                    except:
+                        uploaded_file.seek(0)
+                        df_raw = pd.read_csv(uploaded_file, encoding='cp950') # 嘗試 Big5/CP950
+                    
+                    st.write(f"原始資料讀取成功：共 {len(df_raw)} 筆。正在進行智慧轉換...")
+
+                    # --- 轉換邏輯開始 ---
+                    processed_rows = []
+                    
+                    for index, row in df_raw.iterrows():
+                        # 1. 基礎欄位
+                        base_name = str(row.get('姓名', '')).strip()
+                        # 處理年級：如果是 nan 則給空字串
+                        base_grade = str(row.get('年級', '')) if pd.notna(row.get('年級')) else ""
+                        
+                        # 2. 處理電話 (解析 "父親: 09xx\n母親: 09xx")
+                        raw_parent_phone = str(row.get('家長聯絡電話', ''))
+                        raw_stu_phone = str(row.get('學生聯絡電話', ''))
+                        
+                        contact_info = {
+                            "學生手機": raw_stu_phone if raw_stu_phone != "nan" else "",
+                            "爸爸": "", "媽媽": "", "家裡": "", "其他家人": ""
+                        }
+
+                        # 簡易解析邏輯
+                        if raw_parent_phone and raw_parent_phone != "nan":
+                            # 依換行符號切分
+                            segments = raw_parent_phone.split('\n')
+                            for seg in segments:
+                                seg = seg.strip()
+                                if not seg: continue
+                                
+                                # 移除常見雜訊
+                                clean_num = seg.replace(":", "").replace(" ", "").replace("-", "")
+                                # 提取純數字部分供參考 (這裡先保留原字串以便閱讀)
+                                
+                                if "父" in seg:
+                                    contact_info["爸爸"] = seg.replace("父親:", "").replace("父親", "").strip()
+                                elif "母" in seg:
+                                    contact_info["媽媽"] = seg.replace("母親:", "").replace("母親", "").strip()
+                                elif "家" in seg:
+                                    contact_info["家裡"] = seg.replace("家裡:", "").strip()
+                                else:
+                                    # 如果沒有標籤，且第一欄位是空的，先放爸爸，否則放其他
+                                    if not contact_info["爸爸"]: contact_info["爸爸"] = seg
+                                    elif not contact_info["媽媽"]: contact_info["媽媽"] = seg
+                                    else: contact_info["其他家人"] += f" {seg}"
+
+                        # 3. 處理課程 (拆分多行)
+                        raw_courses = str(row.get('報名課程', ''))
+                        if raw_courses and raw_courses != "nan":
+                            courses_list = raw_courses.split('\n')
+                        else:
+                            courses_list = [] # 沒課程的學生 (可能已畢業或單純名單)
+
+                        # 如果沒有課程，還是要建立一筆資料 (班別留空或標記)
+                        if not courses_list:
+                            new_row = {"姓名": base_name, "年級": base_grade, "班別": "未分班"}
+                            new_row.update(contact_info)
+                            processed_rows.append(new_row)
+                        else:
+                            # 有課程，拆成多筆
+                            for c in courses_list:
+                                c_clean = c.strip()
+                                if not c_clean: continue
+                                new_row = {"姓名": base_name, "年級": base_grade, "班別": c_clean}
+                                new_row.update(contact_info)
+                                processed_rows.append(new_row)
+                    
+                    # --- 轉換結束，建立預覽 ---
+                    df_preview = pd.DataFrame(processed_rows)
+                    
+                    st.divider()
+                    st.markdown(f"### 🕵️ 轉換預覽 (共 {len(df_preview)} 筆)")
+                    st.caption("說明：原本「同一格多課程」的學生，現在已被拆分成多筆資料。")
+                    st.dataframe(df_preview)
+                    
+                    col_act1, col_act2 = st.columns(2)
+                    if col_act1.button("✅ 確認無誤，寫入資料庫", type="primary"):
+                        # 轉換為 dict list
+                        final_data = df_preview.to_dict('records')
+                        # 讀取現有資料並合併
                         current_data = get_students_data_cached()
-                        save_students_data(current_data + new_students)
-                        st.success(f"匯入 {len(new_students)} 筆")
-                else: st.error("CSV 格式錯誤")
-            except Exception as e: st.error(f"讀取失敗: {e}")
+                        # 簡單的合併策略：直接 append (如果怕重複，可以之後再清或加判斷)
+                        combined_data = current_data + final_data
+                        
+                        save_students_data(combined_data)
+                        st.success(f"成功匯入 {len(final_data)} 筆資料！請重新整理頁面。")
+                        
+                except Exception as e:
+                    st.error(f"解析失敗: {e}")
+                    st.caption("請確認上傳的是 CSV 格式，且包含：姓名、年級、報名課程、家長聯絡電話 欄位。")
+
+        st.divider()
+        
+        # --- 2. 原有的手動管理介面 (保持不變) ---
+        if st.session_state['is_admin']:
+             if st.button("⬆️ 執行年度升級 (7月)", type="primary"): show_promotion_confirm_dialog()
 
         with st.expander("手動新增學生"):
+            # ... (這裡接原本的手動新增程式碼，不用變) ...
             # ★ 1. 快速帶入舊生資料選單
             st.caption("💡 若為舊生加新班，可直接選取姓名帶入資料")
             select_existing = st.selectbox("快速帶入舊生資料 (可選)", ["不使用"] + list(student_map.keys()))
@@ -405,15 +499,11 @@ def show_general_management_dialog():
                 def_mom = data.get('媽媽', '')
                 def_other = data.get('其他家人', '')
 
-            # ★ 2. 輸入表單 (移除 st.form 以支援動態更新)
             c1, c2 = st.columns(2)
-            # 這裡使用 value=... 來實現自動填入，key 必須是 dynamic 或者不設
-            # 為了讓 selectbox 改變時能更新，我們不使用 session_state key 綁定，而是依賴 rerender
             ms_name = c1.text_input("學生姓名 (必填)", value=def_name)
             ms_phone = c2.text_input("學生手機", value=def_phone)
             
             c3, c4 = st.columns(2)
-            # 年級選單：如果 def_grade 在選項內就預選，否則預設第一個
             grade_index = GRADE_OPTIONS.index(def_grade) if def_grade in GRADE_OPTIONS else 0
             ms_grade = c3.selectbox("年級 (必填)", GRADE_OPTIONS, index=grade_index)
             
@@ -432,9 +522,7 @@ def show_general_management_dialog():
             ms_other = c8.text_input("其他家人", value=def_other)
             
             if st.button("新增學生資料", type="primary"):
-                # 邏輯檢查
                 contact_filled = any([ms_home, ms_dad, ms_mom, ms_other])
-                
                 if ms_name and ms_grade and ms_class and contact_filled:
                     new_rec = {
                         "姓名": ms_name, "學生手機": ms_phone,
@@ -448,12 +536,10 @@ def show_general_management_dialog():
                     st.success(f"已新增：{ms_name} - {ms_class}")
                     st.rerun()
                 else:
-                    if not contact_filled:
-                        st.error("請至少填寫一個家長/家裡聯絡電話")
-                    else:
-                        st.error("缺必填欄位 (姓名、年級、班別)")
+                    if not contact_filled: st.error("請至少填寫一個家長/家裡聯絡電話")
+                    else: st.error("缺必填欄位 (姓名、年級、班別)")
 
-        # ★ 3. 表格與刪除邏輯
+        # --- 3. 表格與刪除 (保持不變) ---
         st.divider()
         st.caption("學生列表 (可刪除)")
         if current_students:
