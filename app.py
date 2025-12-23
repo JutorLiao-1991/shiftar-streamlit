@@ -372,16 +372,21 @@ def show_general_management_dialog():
         # --- 1. 智慧匯入區塊 (Sandbox) ---
         with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=False):
             st.info("💡 這裡專門處理「多課程擠同一格」與「多電話擠同一格」的 ERP 檔案。")
-            uploaded_file = st.file_uploader("上傳原始 CSV 檔", type=['csv'])
+            # ★ 修改點 1：允許上傳 xlsx
+            uploaded_file = st.file_uploader("上傳原始 Excel/CSV 檔", type=['csv', 'xlsx'])
             
             if uploaded_file:
                 try:
-                    # 嘗試讀取 CSV
-                    try:
-                        df_raw = pd.read_csv(uploaded_file, encoding='utf-8')
-                    except:
-                        uploaded_file.seek(0)
-                        df_raw = pd.read_csv(uploaded_file, encoding='cp950') 
+                    # ★ 修改點 2：自動判斷檔案格式
+                    if uploaded_file.name.endswith('.csv'):
+                        try:
+                            df_raw = pd.read_csv(uploaded_file, encoding='utf-8')
+                        except:
+                            uploaded_file.seek(0)
+                            df_raw = pd.read_csv(uploaded_file, encoding='cp950')
+                    else:
+                        # 讀取 Excel (需要 openpyxl)
+                        df_raw = pd.read_excel(uploaded_file, engine='openpyxl')
                     
                     st.write(f"原始資料讀取成功：共 {len(df_raw)} 筆。正在進行智慧轉換...")
 
@@ -403,7 +408,10 @@ def show_general_management_dialog():
                         }
 
                         if raw_parent_phone and raw_parent_phone != "nan":
+                            # Excel 讀進來換行可能是 \n 或 _x000D_ (視版本而定)，這裡統一處理
+                            raw_parent_phone = raw_parent_phone.replace("_x000D_", "")
                             segments = raw_parent_phone.split('\n')
+                            
                             for seg in segments:
                                 seg = seg.strip()
                                 if not seg: continue
@@ -421,6 +429,8 @@ def show_general_management_dialog():
                         # 3. 處理課程 (拆分多行)
                         raw_courses = str(row.get('報名課程', ''))
                         if raw_courses and raw_courses != "nan":
+                            # 同樣處理 Excel 可能的換行編碼
+                            raw_courses = raw_courses.replace("_x000D_", "")
                             courses_list = raw_courses.split('\n')
                         else:
                             courses_list = []
