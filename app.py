@@ -1042,6 +1042,8 @@ if st.session_state['user']:
     if not target_students and not current_data['absent'] and not current_data['present'] and not current_data['leave']:
         st.info("今日無課程或無學生名單，無須點名")
     else:
+# ... (前面的代碼保持不變)
+
         st.info("💡 請直接拖曳學生姓名卡片，移動到對應區域即可自動儲存。")
         
         # 定義三個區塊
@@ -1051,13 +1053,31 @@ if st.session_state['user']:
             {'header': '🟡 請假', 'items': current_data['leave']}
         ]
 
-        # ★ 產生拖曳介面
+        # ★ 注入 CSS 強制設定卡片寬度 (模擬三個中文字元寬度)
+        st.markdown("""
+        <style>
+            /* 強制設定 sortable item 的寬度與置中 */
+            div[data-testid="stVerticalBlock"] div[draggable="true"] {
+                min-width: 80px !important;  /* 設定最小寬度 */
+                max-width: 80px !important;  /* 設定最大寬度，強制固定 */
+                text-align: center !important; /* 文字置中 */
+                white-space: nowrap !important; /* 防止換行 */
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                margin: 5px !important; /* 增加間距 */
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
+        # ★ 修改點：將 direction 改為 'horizontal'
         sorted_items = sort_items(
             original_items,
             multi_containers=True,
-            direction='vertical',
-            key=f"sortable_{date_key}" # 重要：切換日期時 Key 會變，強制重繪
+            direction='horizontal', # <--- 這裡改成 horizontal (水平排列)
+            key=f"sortable_{date_key}"
         )
+
+        # ... (後面的代碼保持不變)
 
         # 取得拖曳後的結果
         new_absent = sorted_items[0]['items']
