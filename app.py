@@ -979,9 +979,9 @@ if cal.get("eventClick"):
     if st.session_state['user']:
         show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 (手機優化：批次勾選版) ---
+# --- 6. 智慧點名系統 (UI 升級：卡片網格版) ---
 st.divider()
-st.subheader("📋 每日點名 (批次勾選)")
+st.subheader("📋 每日點名 (卡片滑動版)")
 
 # 切換日期按鈕
 col_date_btn, col_date_info = st.columns([1, 3], vertical_alignment="center")
@@ -1033,10 +1033,8 @@ if db_record:
     if "present" not in current_data: current_data["present"] = []
     if "leave" not in current_data: current_data["leave"] = []
 else:
-    # 若無紀錄，預設所有人都在「未到」
     current_data = {"absent": target_students, "present": [], "leave": []}
 
-# 定義儲存函式
 def save_current_state(absent, present, leave):
     save_data = {
         "absent": absent,
@@ -1047,49 +1045,76 @@ def save_current_state(absent, present, leave):
     }
     save_roll_call_to_db(date_key, save_data)
     st.toast("點名資料已儲存", icon="💾")
-    time.sleep(0.5) # 給一點時間讓 toast 顯示
+    time.sleep(0.5)
     st.rerun()
 
-# --- 權限檢查與 UI 呈現 ---
+# --- CSS 美化：調整卡片樣式 ---
+st.markdown("""
+<style>
+    /* 讓 Toggle 開關更明顯 */
+    div[data-testid="stCheckbox"] label {
+        font-weight: bold;
+    }
+    /* 調整 Container 的 padding，讓卡片緊湊一點 */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        padding: 1rem;
+        background-color: #f9f9f9; /* 淺灰底色，增加卡片感 */
+    }
+    /* 暗黑模式適配 */
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            background-color: #262730;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
+
 if st.session_state['user']:
     if not target_students and not current_data['absent'] and not current_data['present'] and not current_data['leave']:
         st.info("今日無課程或無學生名單，無須點名")
     else:
-        # === A. 主要操作區：未到名單 ===
+        # === A. 主要操作區：未到名單 (卡片網格) ===
         st.markdown("### 🔴 尚未報到")
         
         pending_list = current_data['absent']
         if pending_list:
-            # 建立 DataFrame 供 data_editor 使用，方便批次勾選
-            df_pending = pd.DataFrame([{"報到": False, "請假": False, "姓名": name} for name in pending_list])
+            # 暫存使用者的勾選狀態
+            selection_state = {"present": [], "leave": []}
             
-            # 使用 data_editor 呈現表格
-            edited_df = st.data_editor(
-                df_pending,
-                column_config={
-                    "報到": st.column_config.CheckboxColumn("報到", default=False, width="small"),
-                    "請假": st.column_config.CheckboxColumn("請假", default=False, width="small"),
-                    "姓名": st.column_config.TextColumn("姓名", disabled=True),
-                },
-                hide_index=True,
-                use_container_width=True,
-                key=f"editor_{date_key}"
-            )
+            # 建立網格 (Grid Layout)
+            # 手機上通常一行 2 個比較剛好，電腦上可以多一點，這裡設為 2 欄自適應
+            cols = st.columns(2) 
             
-            # 確認按鈕
-            if st.button("✅ 執行批次更新", type="primary", use_container_width=True):
-                # 解析勾選結果
-                to_present = edited_df[edited_df["報到"] == True]["姓名"].tolist()
-                to_leave = edited_df[edited_df["請假"] == True]["姓名"].tolist()
+            for i, name in enumerate(pending_list):
+                # 使用 container(border=True) 建立卡片效果
+                with cols[i % 2].container(border=True):
+                    # 學生姓名 (大字體)
+                    st.markdown(f"#### 🎓 {name}")
+                    
+                    # 使用 Toggle (開關) 代替 Checkbox，更有質感
+                    # 注意：這裡使用 columns 再分兩欄，讓兩個開關並排
+                    c_toggle1, c_toggle2 = st.columns(2)
+                    
+                    is_present = c_toggle1.toggle("報到", key=f"tg_p_{name}_{date_key}")
+                    is_leave = c_toggle2.toggle("請假", key=f"tg_l_{name}_{date_key}")
+                    
+                    if is_present: selection_state["present"].append(name)
+                    if is_leave: selection_state["leave"].append(name)
+
+            st.divider()
+            
+            # 確認按鈕 (Sticky Bottom 感覺)
+            if st.button("🚀 確認送出 (更新狀態)", type="primary", use_container_width=True):
+                to_present = selection_state["present"]
+                to_leave = selection_state["leave"]
                 
-                # 邏輯檢查：不能同時勾選
+                # 衝突檢查
                 conflict = set(to_present) & set(to_leave)
                 if conflict:
-                    st.error(f"錯誤：{', '.join(conflict)} 不能同時勾選報到與請假")
+                    st.error(f"錯誤：{', '.join(conflict)} 不能同時開啟「報到」與「請假」")
                 elif not to_present and not to_leave:
-                    st.warning("未勾選任何學生")
+                    st.warning("未選擇任何學生")
                 else:
-                    # 執行移動
                     new_absent = [p for p in pending_list if p not in to_present and p not in to_leave]
                     new_present = current_data['present'] + to_present
                     new_leave = current_data['leave'] + to_leave
@@ -1099,32 +1124,34 @@ if st.session_state['user']:
 
         st.divider()
 
-        # === B. 檢視與反悔區 (使用 Expander 收納) ===
+        # === B. 檢視與反悔區 (使用 Pills/Tags 風格呈現) ===
         with st.expander(f"🟢 已到 ({len(current_data['present'])})  |  🟡 請假 ({len(current_data['leave'])})", expanded=False):
             
-            c1, c2 = st.columns(2)
-            with c1:
-                st.write("**🟢 已到名單**")
-                if current_data['present']:
-                    # 使用 multiselect 作為反悔工具
-                    undo_present = st.multiselect("勾選以取消報到", current_data['present'], key="undo_p")
-                    if undo_present and st.button("↩️ 取消報到 (移回未到)", key="btn_undo_p"):
-                        new_present = [p for p in current_data['present'] if p not in undo_present]
-                        new_absent = current_data['absent'] + undo_present
-                        save_current_state(new_absent, new_present, current_data['leave'])
-                else:
-                    st.caption("無")
+            st.write("**🟢 已到名單 (點擊取消)**")
+            if current_data['present']:
+                # 使用 columns 來排列按鈕，模擬 Tag 點擊刪除的效果
+                p_cols = st.columns(4)
+                for i, p in enumerate(current_data['present']):
+                    if p_cols[i % 4].button(f"↩️ {p}", key=f"undo_p_{p}"):
+                        current_data['present'].remove(p)
+                        current_data['absent'].append(p)
+                        save_current_state(current_data['absent'], current_data['present'], current_data['leave'])
+            else:
+                st.caption("無")
 
-            with c2:
-                st.write("**🟡 請假名單**")
-                if current_data['leave']:
-                    undo_leave = st.multiselect("勾選以取消請假", current_data['leave'], key="undo_l")
-                    if undo_leave and st.button("↩️ 取消請假 (移回未到)", key="btn_undo_l"):
-                        new_leave = [p for p in current_data['leave'] if p not in undo_leave]
-                        new_absent = current_data['absent'] + undo_leave
-                        save_current_state(new_absent, current_data['present'], new_leave)
-                else:
-                    st.caption("無")
+            st.divider()
+
+            st.write("**🟡 請假名單 (點擊取消)**")
+            if current_data['leave']:
+                l_cols = st.columns(4)
+                for i, l in enumerate(current_data['leave']):
+                    if l_cols[i % 4].button(f"↩️ {l}", key=f"undo_l_{l}"):
+                        current_data['leave'].remove(l)
+                        current_data['absent'].append(l)
+                        save_current_state(current_data['absent'], current_data['present'], current_data['leave'])
+            else:
+                st.caption("無")
 
 else:
     st.warning("請登入以進行點名")
+
