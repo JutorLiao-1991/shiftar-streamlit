@@ -366,7 +366,7 @@ def show_general_management_dialog():
         label = f"{s.get('姓名')} ({s.get('年級', '')})"
         student_map[label] = s
     
-with tab1:
+    with tab1:
         st.caption("🎓 學生名單管理 (診斷模式)")
         
         # --- 診斷專用區塊 ---
