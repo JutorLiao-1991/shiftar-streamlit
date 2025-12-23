@@ -979,9 +979,9 @@ if cal.get("eventClick"):
     if st.session_state['user']:
         show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 (UI 升級：拖曳版) ---
+# --- 6. 智慧點名系統 (手機優化：批次勾選版) ---
 st.divider()
-st.subheader("📋 每日點名 (拖曳版)")
+st.subheader("📋 每日點名 (批次勾選)")
 
 # 切換日期按鈕
 col_date_btn, col_date_info = st.columns([1, 3], vertical_alignment="center")
@@ -1029,7 +1029,6 @@ target_students = list(set(target_students))
 # 決定當前點名狀態
 if db_record:
     current_data = db_record
-    # 防呆：確保舊資料也有這三個欄位
     if "absent" not in current_data: current_data["absent"] = []
     if "present" not in current_data: current_data["present"] = []
     if "leave" not in current_data: current_data["leave"] = []
@@ -1037,67 +1036,95 @@ else:
     # 若無紀錄，預設所有人都在「未到」
     current_data = {"absent": target_students, "present": [], "leave": []}
 
+# 定義儲存函式
+def save_current_state(absent, present, leave):
+    save_data = {
+        "absent": absent,
+        "present": present,
+        "leave": leave,
+        "updated_at": datetime.datetime.now().isoformat(),
+        "updated_by": st.session_state['user']
+    }
+    save_roll_call_to_db(date_key, save_data)
+    st.toast("點名資料已儲存", icon="💾")
+    time.sleep(0.5) # 給一點時間讓 toast 顯示
+    st.rerun()
+
 # --- 權限檢查與 UI 呈現 ---
 if st.session_state['user']:
     if not target_students and not current_data['absent'] and not current_data['present'] and not current_data['leave']:
         st.info("今日無課程或無學生名單，無須點名")
     else:
-# ... (前面的代碼保持不變)
-
-        st.info("💡 請直接拖曳學生姓名卡片，移動到對應區域即可自動儲存。")
+        # === A. 主要操作區：未到名單 ===
+        st.markdown("### 🔴 尚未報到")
         
-        # 定義三個區塊
-        original_items = [
-            {'header': '🔴 未到', 'items': current_data['absent']},
-            {'header': '🟢 已到', 'items': current_data['present']},
-            {'header': '🟡 請假', 'items': current_data['leave']}
-        ]
-
-        # ★ 注入 CSS 強制設定卡片寬度 (模擬三個中文字元寬度)
-        st.markdown("""
-        <style>
-            /* 強制設定 sortable item 的寬度與置中 */
-            div[data-testid="stVerticalBlock"] div[draggable="true"] {
-                min-width: 80px !important;  /* 設定最小寬度 */
-                max-width: 80px !important;  /* 設定最大寬度，強制固定 */
-                text-align: center !important; /* 文字置中 */
-                white-space: nowrap !important; /* 防止換行 */
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-                margin: 5px !important; /* 增加間距 */
-            }
-        </style>
-        """, unsafe_allow_html=True)
-
-        # ★ 修改點：將 direction 改為 'horizontal'
-        sorted_items = sort_items(
-            original_items,
-            multi_containers=True,
-            direction='horizontal', # <--- 這裡改成 horizontal (水平排列)
-            key=f"sortable_{date_key}"
-        )
-
-        # ... (後面的代碼保持不變)
-
-        # 取得拖曳後的結果
-        new_absent = sorted_items[0]['items']
-        new_present = sorted_items[1]['items']
-        new_leave = sorted_items[2]['items']
-
-        # 比較是否有變動，有變動才寫入資料庫
-        if (new_absent != current_data['absent'] or 
-            new_present != current_data['present'] or 
-            new_leave != current_data['leave']):
+        pending_list = current_data['absent']
+        if pending_list:
+            # 建立 DataFrame 供 data_editor 使用，方便批次勾選
+            df_pending = pd.DataFrame([{"報到": False, "請假": False, "姓名": name} for name in pending_list])
             
-            save_data = {
-                "absent": new_absent,
-                "present": new_present,
-                "leave": new_leave,
-                "updated_at": datetime.datetime.now().isoformat(),
-                "updated_by": st.session_state['user']
-            }
-            save_roll_call_to_db(date_key, save_data)
-            st.toast("點名狀態已更新！", icon="💾")
+            # 使用 data_editor 呈現表格
+            edited_df = st.data_editor(
+                df_pending,
+                column_config={
+                    "報到": st.column_config.CheckboxColumn("報到", default=False, width="small"),
+                    "請假": st.column_config.CheckboxColumn("請假", default=False, width="small"),
+                    "姓名": st.column_config.TextColumn("姓名", disabled=True),
+                },
+                hide_index=True,
+                use_container_width=True,
+                key=f"editor_{date_key}"
+            )
+            
+            # 確認按鈕
+            if st.button("✅ 執行批次更新", type="primary", use_container_width=True):
+                # 解析勾選結果
+                to_present = edited_df[edited_df["報到"] == True]["姓名"].tolist()
+                to_leave = edited_df[edited_df["請假"] == True]["姓名"].tolist()
+                
+                # 邏輯檢查：不能同時勾選
+                conflict = set(to_present) & set(to_leave)
+                if conflict:
+                    st.error(f"錯誤：{', '.join(conflict)} 不能同時勾選報到與請假")
+                elif not to_present and not to_leave:
+                    st.warning("未勾選任何學生")
+                else:
+                    # 執行移動
+                    new_absent = [p for p in pending_list if p not in to_present and p not in to_leave]
+                    new_present = current_data['present'] + to_present
+                    new_leave = current_data['leave'] + to_leave
+                    save_current_state(new_absent, new_present, new_leave)
+        else:
+            st.success("🎉 全員已完成點名處理！")
+
+        st.divider()
+
+        # === B. 檢視與反悔區 (使用 Expander 收納) ===
+        with st.expander(f"🟢 已到 ({len(current_data['present'])})  |  🟡 請假 ({len(current_data['leave'])})", expanded=False):
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**🟢 已到名單**")
+                if current_data['present']:
+                    # 使用 multiselect 作為反悔工具
+                    undo_present = st.multiselect("勾選以取消報到", current_data['present'], key="undo_p")
+                    if undo_present and st.button("↩️ 取消報到 (移回未到)", key="btn_undo_p"):
+                        new_present = [p for p in current_data['present'] if p not in undo_present]
+                        new_absent = current_data['absent'] + undo_present
+                        save_current_state(new_absent, new_present, current_data['leave'])
+                else:
+                    st.caption("無")
+
+            with c2:
+                st.write("**🟡 請假名單**")
+                if current_data['leave']:
+                    undo_leave = st.multiselect("勾選以取消請假", current_data['leave'], key="undo_l")
+                    if undo_leave and st.button("↩️ 取消請假 (移回未到)", key="btn_undo_l"):
+                        new_leave = [p for p in current_data['leave'] if p not in undo_leave]
+                        new_absent = current_data['absent'] + undo_leave
+                        save_current_state(new_absent, current_data['present'], new_leave)
+                else:
+                    st.caption("無")
 
 else:
     st.warning("請登入以進行點名")
