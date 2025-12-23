@@ -4,3 +4,4 @@ firebase-admin
 requests
 pandas
 openpyxl
+streamlit-sortables
