@@ -372,17 +372,17 @@ with tab1:
         
         # --- 1. 智慧匯入區塊 (Sandbox) ---
         with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=False):
-            st.info("💡 這裡可以處理「多課程擠同一格」與「多電話擠同一格」的舊系統檔案。")
+            st.info("💡 這裡專門處理「多課程擠同一格」與「多電話擠同一格」的 ERP 檔案。")
             uploaded_file = st.file_uploader("上傳原始 CSV 檔", type=['csv'])
             
             if uploaded_file:
                 try:
-                    # 嘗試讀取 CSV (處理可能的編碼問題)
+                    # 嘗試讀取 CSV (處理可能的編碼問題，Excel 轉 CSV 常見 cp950 或 utf-8)
                     try:
                         df_raw = pd.read_csv(uploaded_file, encoding='utf-8')
                     except:
                         uploaded_file.seek(0)
-                        df_raw = pd.read_csv(uploaded_file, encoding='cp950') # 嘗試 Big5/CP950
+                        df_raw = pd.read_csv(uploaded_file, encoding='cp950') 
                     
                     st.write(f"原始資料讀取成功：共 {len(df_raw)} 筆。正在進行智慧轉換...")
 
@@ -404,7 +404,7 @@ with tab1:
                             "爸爸": "", "媽媽": "", "家裡": "", "其他家人": ""
                         }
 
-                        # 簡易解析邏輯
+                        # 解析電話邏輯
                         if raw_parent_phone and raw_parent_phone != "nan":
                             # 依換行符號切分
                             segments = raw_parent_phone.split('\n')
@@ -412,10 +412,7 @@ with tab1:
                                 seg = seg.strip()
                                 if not seg: continue
                                 
-                                # 移除常見雜訊
-                                clean_num = seg.replace(":", "").replace(" ", "").replace("-", "")
-                                # 提取純數字部分供參考 (這裡先保留原字串以便閱讀)
-                                
+                                # 簡單正規化
                                 if "父" in seg:
                                     contact_info["爸爸"] = seg.replace("父親:", "").replace("父親", "").strip()
                                 elif "母" in seg:
@@ -423,7 +420,7 @@ with tab1:
                                 elif "家" in seg:
                                     contact_info["家裡"] = seg.replace("家裡:", "").strip()
                                 else:
-                                    # 如果沒有標籤，且第一欄位是空的，先放爸爸，否則放其他
+                                    # 如果沒有標籤，先嘗試填入爸爸，若有則填入媽媽，再有則填入其他
                                     if not contact_info["爸爸"]: contact_info["爸爸"] = seg
                                     elif not contact_info["媽媽"]: contact_info["媽媽"] = seg
                                     else: contact_info["其他家人"] += f" {seg}"
@@ -431,17 +428,18 @@ with tab1:
                         # 3. 處理課程 (拆分多行)
                         raw_courses = str(row.get('報名課程', ''))
                         if raw_courses and raw_courses != "nan":
+                            # ★ 關鍵：這裡把同一格的課程炸開
                             courses_list = raw_courses.split('\n')
                         else:
-                            courses_list = [] # 沒課程的學生 (可能已畢業或單純名單)
+                            courses_list = []
 
-                        # 如果沒有課程，還是要建立一筆資料 (班別留空或標記)
+                        # 如果沒有課程，還是要建立一筆資料 (班別留空)
                         if not courses_list:
                             new_row = {"姓名": base_name, "年級": base_grade, "班別": "未分班"}
                             new_row.update(contact_info)
                             processed_rows.append(new_row)
                         else:
-                            # 有課程，拆成多筆
+                            # 有課程，拆成多筆 (Ex: 國二數學一筆, 國二英文一筆)
                             for c in courses_list:
                                 c_clean = c.strip()
                                 if not c_clean: continue
@@ -463,7 +461,7 @@ with tab1:
                         final_data = df_preview.to_dict('records')
                         # 讀取現有資料並合併
                         current_data = get_students_data_cached()
-                        # 簡單的合併策略：直接 append (如果怕重複，可以之後再清或加判斷)
+                        # 合併策略：直接 append
                         combined_data = current_data + final_data
                         
                         save_students_data(combined_data)
@@ -480,7 +478,6 @@ with tab1:
              if st.button("⬆️ 執行年度升級 (7月)", type="primary"): show_promotion_confirm_dialog()
 
         with st.expander("手動新增學生"):
-            # ... (這裡接原本的手動新增程式碼，不用變) ...
             # ★ 1. 快速帶入舊生資料選單
             st.caption("💡 若為舊生加新班，可直接選取姓名帶入資料")
             select_existing = st.selectbox("快速帶入舊生資料 (可選)", ["不使用"] + list(student_map.keys()))
@@ -500,6 +497,7 @@ with tab1:
                 def_other = data.get('其他家人', '')
 
             c1, c2 = st.columns(2)
+            # value=... 自動填入
             ms_name = c1.text_input("學生姓名 (必填)", value=def_name)
             ms_phone = c2.text_input("學生手機", value=def_phone)
             
