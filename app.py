@@ -11,6 +11,7 @@ import pandas as pd
 import uuid
 import calendar as py_calendar
 from collections import defaultdict
+from streamlit_sortables import sort_items
 
 # --- 1. 系統設定 ---
 st.set_page_config(page_title="鳩特數理行政班表", page_icon="🏫", layout="wide")
@@ -978,12 +979,13 @@ if cal.get("eventClick"):
     if st.session_state['user']:
         show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 ---
+# --- 6. 智慧點名系統 (UI 升級：拖曳版) ---
 st.divider()
-st.subheader("📋 每日點名")
+st.subheader("📋 每日點名 (拖曳版)")
 
-# ★ 回顧點名按鈕移到這裡
-if st.button("📅 切換/回顧點名日期", type="primary", use_container_width=True):
+# 切換日期按鈕
+col_date_btn, col_date_info = st.columns([1, 3], vertical_alignment="center")
+if col_date_btn.button("📅 切換日期", type="secondary"):
     show_roll_call_review_dialog()
 
 # 決定日期
@@ -992,11 +994,13 @@ if 'selected_calendar_date' in st.session_state:
 else:
     selected_date = datetime.date.today()
 
-st.info(f"正在檢視：**{selected_date}** 的點名紀錄")
+with col_date_info:
+    st.markdown(f"**{selected_date}**")
+
 date_key = selected_date.isoformat()
 db_record = get_roll_call_from_db(date_key)
 
-# ★ 修正重點：拆分顯示清單與比對清單
+# 準備比對當日課程
 daily_courses_display = []
 daily_courses_filter = []
 
@@ -1005,72 +1009,75 @@ for e in all_events:
         props = e.get('extendedProps', {})
         c_title = props.get('title', '')
         c_loc = props.get('location', '')
-        
-        # 存入比對用的純課程名稱
         daily_courses_filter.append(c_title)
-        
-        # 存入顯示用的完整名稱 (含教室)
-        if c_loc:
-            daily_courses_display.append(f"{c_title} ({c_loc})")
-        else:
-            daily_courses_display.append(c_title)
+        if c_loc: daily_courses_display.append(f"{c_title} ({c_loc})")
+        else: daily_courses_display.append(c_title)
 
+# 抓取應到學生
 all_students = get_students_data_cached()
 target_students = []
-
 if daily_courses_display:
-    # 顯示包含教室的課程清單
-    st.write(f"📅 當日課程：{'、'.join(daily_courses_display)}")
+    st.caption(f"當日課程：{'、'.join(daily_courses_display)}")
     for stu in all_students:
-        # 使用純課程名稱來比對學生班別
         if stu.get('班別') in daily_courses_filter:
             target_students.append(stu['姓名'])
 else:
-    st.write("📅 當日無排課紀錄")
+    st.caption("當日無排課紀錄")
 
-# ★ 修復重複學生 Bug：使用 set 去除重複姓名
 target_students = list(set(target_students))
 
+# 決定當前點名狀態
 if db_record:
     current_data = db_record
+    # 防呆：確保舊資料也有這三個欄位
+    if "absent" not in current_data: current_data["absent"] = []
+    if "present" not in current_data: current_data["present"] = []
+    if "leave" not in current_data: current_data["leave"] = []
 else:
+    # 若無紀錄，預設所有人都在「未到」
     current_data = {"absent": target_students, "present": [], "leave": []}
 
-def update_status_and_save(student_name, from_list, to_list):
-    current_data[from_list].remove(student_name)
-    current_data[to_list].append(student_name)
-    save_data = {
-        "absent": current_data['absent'], "present": current_data['present'], "leave": current_data['leave'],
-        "updated_at": datetime.datetime.now().isoformat(), "updated_by": st.session_state['user']
-    }
-    save_roll_call_to_db(date_key, save_data)
-    st.rerun()
-
+# --- 權限檢查與 UI 呈現 ---
 if st.session_state['user']:
-    if not current_data['absent'] and not current_data['present'] and not current_data['leave']:
-        st.info("無須點名")
+    if not target_students and not current_data['absent'] and not current_data['present'] and not current_data['leave']:
+        st.info("今日無課程或無學生名單，無須點名")
     else:
-        if st.button("🔄 刷新數據 (同步最新狀態)", use_container_width=True): st.rerun()
-        with st.expander("點名表單", expanded=True):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown("### 🔴 未到")
-                if current_data['absent']:
-                    cols = st.columns(4)
-                    for i, s in enumerate(current_data['absent']):
-                        if cols[i%4].button(s, key=f"ab_{s}_{date_key}"):
-                            update_status_and_save(s, "absent", "present")
-            with c2:
-                st.markdown("### 🟢 已到")
-                for s in current_data['present']:
-                    if st.button(f"✅ {s}", key=f"pr_{s}_{date_key}", type="primary", use_container_width=True):
-                        update_status_and_save(s, "present", "absent")
-            with c3:
-                st.markdown("### 🟡 請假")
-                val = st.selectbox("請假", ["選擇..."] + current_data['absent'], key=f"lv_{date_key}")
-                if val != "選擇...": update_status_and_save(val, "absent", "leave")
-                for s in current_data['leave']:
-                    if st.button(f"🤒 {s}", key=f"le_{s}_{date_key}", use_container_width=True):
-                        update_status_and_save(s, "leave", "absent")
+        st.info("💡 請直接拖曳學生姓名卡片，移動到對應區域即可自動儲存。")
+        
+        # 定義三個區塊
+        original_items = [
+            {'header': '🔴 未到', 'items': current_data['absent']},
+            {'header': '🟢 已到', 'items': current_data['present']},
+            {'header': '🟡 請假', 'items': current_data['leave']}
+        ]
+
+        # ★ 產生拖曳介面
+        sorted_items = sort_items(
+            original_items,
+            multi_containers=True,
+            direction='vertical',
+            key=f"sortable_{date_key}" # 重要：切換日期時 Key 會變，強制重繪
+        )
+
+        # 取得拖曳後的結果
+        new_absent = sorted_items[0]['items']
+        new_present = sorted_items[1]['items']
+        new_leave = sorted_items[2]['items']
+
+        # 比較是否有變動，有變動才寫入資料庫
+        if (new_absent != current_data['absent'] or 
+            new_present != current_data['present'] or 
+            new_leave != current_data['leave']):
+            
+            save_data = {
+                "absent": new_absent,
+                "present": new_present,
+                "leave": new_leave,
+                "updated_at": datetime.datetime.now().isoformat(),
+                "updated_by": st.session_state['user']
+            }
+            save_roll_call_to_db(date_key, save_data)
+            st.toast("點名狀態已更新！", icon="💾")
+
 else:
     st.warning("請登入以進行點名")
