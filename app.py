@@ -366,18 +366,18 @@ def show_general_management_dialog():
         label = f"{s.get('姓名')} ({s.get('年級', '')})"
         student_map[label] = s
     
-    with tab1:
-        st.caption("🎓 學生名單管理 (含智慧匯入)")
+with tab1:
+        st.caption("🎓 學生名單管理 (診斷模式)")
         
-        # --- 1. 智慧匯入區塊 (Sandbox) ---
-        with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=False):
-            st.info("💡 這裡專門處理「多課程擠同一格」與「多電話擠同一格」的 ERP 檔案。")
-            # ★ 修改點 1：允許上傳 xlsx
+        # --- 診斷專用區塊 ---
+        with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=True):
+            st.warning("請上傳檔案，系統會顯示正確的欄位名稱")
+            # 支援 xlsx 與 csv
             uploaded_file = st.file_uploader("上傳原始 Excel/CSV 檔", type=['csv', 'xlsx'])
             
             if uploaded_file:
                 try:
-                    # ★ 修改點 2：自動判斷檔案格式
+                    # 1. 判斷格式並讀取
                     if uploaded_file.name.endswith('.csv'):
                         try:
                             df_raw = pd.read_csv(uploaded_file, encoding='utf-8')
@@ -385,88 +385,30 @@ def show_general_management_dialog():
                             uploaded_file.seek(0)
                             df_raw = pd.read_csv(uploaded_file, encoding='cp950')
                     else:
-                        # 讀取 Excel (需要 openpyxl)
+                        import openpyxl
+                        # data_only=True 避免讀到 Excel 公式
                         df_raw = pd.read_excel(uploaded_file, engine='openpyxl')
-                    
-                    st.write(f"原始資料讀取成功：共 {len(df_raw)} 筆。正在進行智慧轉換...")
 
-                    # --- 轉換邏輯 ---
-                    processed_rows = []
-                    
-                    for index, row in df_raw.iterrows():
-                        # 1. 基礎欄位
-                        base_name = str(row.get('姓名', '')).strip()
-                        base_grade = str(row.get('年級', '')) if pd.notna(row.get('年級')) else ""
-                        
-                        # 2. 處理電話
-                        raw_parent_phone = str(row.get('家長聯絡電話', ''))
-                        raw_stu_phone = str(row.get('學生聯絡電話', ''))
-                        
-                        contact_info = {
-                            "學生手機": raw_stu_phone if raw_stu_phone != "nan" else "",
-                            "爸爸": "", "媽媽": "", "家裡": "", "其他家人": ""
-                        }
-
-                        if raw_parent_phone and raw_parent_phone != "nan":
-                            # Excel 讀進來換行可能是 \n 或 _x000D_ (視版本而定)，這裡統一處理
-                            raw_parent_phone = raw_parent_phone.replace("_x000D_", "")
-                            segments = raw_parent_phone.split('\n')
-                            
-                            for seg in segments:
-                                seg = seg.strip()
-                                if not seg: continue
-                                if "父" in seg:
-                                    contact_info["爸爸"] = seg.replace("父親:", "").replace("父親", "").strip()
-                                elif "母" in seg:
-                                    contact_info["媽媽"] = seg.replace("母親:", "").replace("母親", "").strip()
-                                elif "家" in seg:
-                                    contact_info["家裡"] = seg.replace("家裡:", "").strip()
-                                else:
-                                    if not contact_info["爸爸"]: contact_info["爸爸"] = seg
-                                    elif not contact_info["媽媽"]: contact_info["媽媽"] = seg
-                                    else: contact_info["其他家人"] += f" {seg}"
-
-                        # 3. 處理課程 (拆分多行)
-                        raw_courses = str(row.get('報名課程', ''))
-                        if raw_courses and raw_courses != "nan":
-                            # 同樣處理 Excel 可能的換行編碼
-                            raw_courses = raw_courses.replace("_x000D_", "")
-                            courses_list = raw_courses.split('\n')
-                        else:
-                            courses_list = []
-
-                        if not courses_list:
-                            new_row = {"姓名": base_name, "年級": base_grade, "班別": "未分班"}
-                            new_row.update(contact_info)
-                            processed_rows.append(new_row)
-                        else:
-                            for c in courses_list:
-                                c_clean = c.strip()
-                                if not c_clean: continue
-                                new_row = {"姓名": base_name, "年級": base_grade, "班別": c_clean}
-                                new_row.update(contact_info)
-                                processed_rows.append(new_row)
-                    
-                    # --- 預覽 ---
-                    df_preview = pd.DataFrame(processed_rows)
+                    # 2. 顯示診斷資訊 (這就是我們要的答案！)
                     st.divider()
-                    st.markdown(f"### 🕵️ 轉換預覽 (共 {len(df_preview)} 筆)")
-                    st.dataframe(df_preview)
+                    st.markdown("### 👇 請截圖或複製下面這個列表給我 👇")
+                    st.write("系統讀到的欄位名稱：")
+                    # 這裡會直接印出所有的欄位名稱 List
+                    st.code(list(df_raw.columns))
                     
-                    if st.button("✅ 確認無誤，寫入資料庫", type="primary"):
-                        final_data = df_preview.to_dict('records')
-                        current_data = get_students_data_cached()
-                        combined_data = current_data + final_data
-                        save_students_data(combined_data)
-                        st.success(f"成功匯入 {len(final_data)} 筆資料！")
-                        
-                except Exception as e:
-                    st.error(f"解析失敗: {e}")
+                    st.write("第一筆資料內容 (檢查是否有讀到值)：")
+                    if not df_raw.empty:
+                        st.json(df_raw.iloc[0].to_dict())
+                    
+                    st.divider()
+                    st.info("確認完欄位名稱後，我們會再把這裡換回正式匯入功能。")
 
-        st.divider()
-        
-        if st.session_state['is_admin']:
-             if st.button("⬆️ 執行年度升級 (7月)", type="primary"): show_promotion_confirm_dialog()
+                except Exception as e:
+                    st.error(f"讀取失敗: {e}")
+
+        # 下面原本的手動新增功能保持不動
+        with st.expander("手動新增學生"):
+             st.write("（診斷模式中暫時隱藏）")
 
         # --- 手動新增 ---
         with st.expander("手動新增學生"):
