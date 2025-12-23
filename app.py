@@ -365,10 +365,10 @@ def show_general_management_dialog():
         student_map[label] = s
     
     with tab1:
-        st.caption("🎓 學生名單管理 (自動去稱謂版)")
+        st.caption("🎓 學生名單管理 (關鍵字分流版)")
         
         with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=True):
-            st.info("💡 系統會自動移除「父親:」、「tel:」等稱謂，只保留號碼。")
+            st.info("💡 請選擇那個「包含所有電話」的欄位，系統會根據 (個人手機/tel/爸爸/媽媽) 自動歸類。")
             uploaded_file = st.file_uploader("上傳原始 Excel/CSV 檔", type=['csv', 'xlsx'])
             
             if uploaded_file:
@@ -396,87 +396,86 @@ def show_general_management_dialog():
                             if any(k in opt for k in keywords): return i
                         return 0
 
-                    # 第一排
-                    c1, c2, c3 = st.columns(3)
-                    col_name = c1.selectbox("1. 姓名", all_columns, index=get_idx(['姓名', 'Name']))
-                    col_grade = c2.selectbox("2. 年級", all_columns, index=get_idx(['年級', 'Grade']))
-                    col_course = c3.selectbox("3. 課程 (會自動拆分)", all_columns, index=get_idx(['課程', '班別', 'Class', '報名']))
-
-                    # 第二排
-                    st.caption("請選擇對應的電話欄位 (系統將自動清除文字，只留號碼)：")
-                    c4, c5 = st.columns(2)
-                    col_stu_mobile = c4.selectbox("4. 學生手機 (個人手機)", all_columns, index=get_idx(['學生', '手機', 'Mobile']))
-                    col_home_tel = c5.selectbox("5. 市話 (tel/家裡)", all_columns, index=get_idx(['tel', '市話', '家裡', 'Home']))
+                    c1, c2 = st.columns(2)
+                    col_name = c1.selectbox("1. 姓名欄位", all_columns, index=get_idx(['姓名', 'Name']))
+                    col_grade = c2.selectbox("2. 年級欄位", all_columns, index=get_idx(['年級', 'Grade']))
                     
-                    c6, c7 = st.columns(2)
-                    col_dad = c6.selectbox("6. 爸爸電話", all_columns, index=get_idx(['爸', '父', 'Dad']))
-                    col_mom = c7.selectbox("7. 媽媽電話", all_columns, index=get_idx(['媽', '母', 'Mom']))
+                    c3, c4 = st.columns(2)
+                    col_course = c3.selectbox("3. 課程欄位", all_columns, index=get_idx(['課程', '班別', 'Class', '報名']))
+                    
+                    # ★ 關鍵修改：只選一個「大雜燴」欄位
+                    col_mixed_contact = c4.selectbox("4. 綜合聯絡資訊欄位 (含tel/爸/媽/手機)", all_columns, index=get_idx(['電話', '聯絡', 'Contact', 'Tel']))
 
                     st.divider()
 
                     # --- 2. 轉換邏輯 ---
                     processed_rows = []
-                    
-                    target_cols = {
-                        "name": col_name, "grade": col_grade, "course": col_course,
-                        "stu_mob": col_stu_mobile, "home": col_home_tel,
-                        "dad": col_dad, "mom": col_mom
-                    }
 
-                    # ★ 定義強力清潔函式 ★
-                    def clean_phone_number(val):
-                        if pd.isna(val): return ""
-                        text = str(val).strip()
-                        if not text or text.lower() == 'nan': return ""
-                        
-                        # 定義要移除的雜訊關鍵字 (包含中英文、全形半形)
-                        noise_words = [
-                            "父親", "爸爸", "父", "Dad", "dad", "Father",
-                            "母親", "媽媽", "母", "Mom", "mom", "Mother",
-                            "家裡", "市話", "住家", "Home", "home", "Tel", "tel", "TEL",
-                            "學生", "個人", "手機", "Mobile", "mobile",
-                            ":", "：", "(", ")", "（", "）", " " # 移除冒號、括號與空格
-                        ]
-                        
-                        # 迴圈移除所有雜訊
-                        for word in noise_words:
-                            text = text.replace(word, "")
-                        
-                        # 處理 Excel 可能殘留的換行
-                        text = text.replace("_x000D_", "").replace("\n", "").replace("\r", "")
-                        
-                        return text.strip()
+                    # ★ 定義號碼清洗器 (只留數字)
+                    def clean_only_digits(text):
+                        if not text: return ""
+                        # 移除常見雜訊，只留數字和連字號
+                        import re
+                        # 替換掉所有非數字和非 - 的字元
+                        clean = re.sub(r'[^\d\-]', '', text)
+                        return clean
 
                     for index, row in df_raw.iterrows():
                         # 安全讀取
-                        def get_raw_val(col_key):
-                            col = target_cols[col_key]
+                        def get_val(col):
                             val = row.get(col)
-                            if pd.isna(val): return ""
+                            if pd.isna(val) or str(val).lower() == 'nan': return ""
                             return str(val).strip()
 
-                        # A. 基礎資料
-                        base_name = get_raw_val("name")
-                        if not base_name or base_name.lower() == 'nan': continue
+                        base_name = get_val(col_name)
+                        if not base_name: continue
+                        base_grade = get_val(col_grade)
                         
-                        # 年級不做去雜訊，直接讀
-                        base_grade = str(row.get(target_cols["grade"])).strip()
-                        if base_grade.lower() == 'nan': base_grade = ""
-
-                        # B. 電話資料 (使用 clean_phone_number)
+                        # ★ 核心邏輯：解析大雜燴欄位
+                        raw_contact = get_val(col_mixed_contact)
+                        
                         contact_info = {
-                            "學生手機": clean_phone_number(row.get(target_cols["stu_mob"])),
-                            "家裡": clean_phone_number(row.get(target_cols["home"])),
-                            "爸爸": clean_phone_number(row.get(target_cols["dad"])),
-                            "媽媽": clean_phone_number(row.get(target_cols["mom"])),
-                            "其他家人": ""
+                            "學生手機": "", "家裡": "", "爸爸": "", "媽媽": "", "其他家人": ""
                         }
+                        
+                        if raw_contact:
+                            # 統一換行符號
+                            txt = raw_contact.replace("_x000D_", "\n").replace("\r", "\n")
+                            segments = txt.split('\n')
+                            
+                            for seg in segments:
+                                seg = seg.strip()
+                                if not seg: continue
+                                
+                                # 依據你提供的關鍵字進行分流
+                                # 優先序：個人手機 -> tel -> 爸爸 -> 媽媽
+                                
+                                if "個人手機" in seg or "學生" in seg or "手機" in seg:
+                                    contact_info["學生手機"] = clean_only_digits(seg)
+                                    
+                                elif "tel" in seg.lower() or "市話" in seg or "家裡" in seg:
+                                    contact_info["家裡"] = clean_only_digits(seg)
+                                    
+                                elif "爸爸" in seg or "父" in seg:
+                                    contact_info["爸爸"] = clean_only_digits(seg)
+                                    
+                                elif "媽媽" in seg or "母" in seg:
+                                    contact_info["媽媽"] = clean_only_digits(seg)
+                                    
+                                else:
+                                    # 無法辨識的，暫存到其他
+                                    clean_num = clean_only_digits(seg)
+                                    if clean_num:
+                                        if not contact_info["其他家人"]:
+                                            contact_info["其他家人"] = clean_num
+                                        else:
+                                            contact_info["其他家人"] += f", {clean_num}"
 
                         # C. 課程處理
-                        raw_courses = row.get(target_cols["course"])
+                        raw_courses = get_val(col_course)
                         courses_list = []
-                        if pd.notna(raw_courses):
-                            txt = str(raw_courses).replace("_x000D_", "\n").replace("\r", "\n")
+                        if raw_courses:
+                            txt = raw_courses.replace("_x000D_", "\n").replace("\r", "\n")
                             split_c = txt.split('\n')
                             courses_list = [c.strip() for c in split_c if c.strip()]
 
@@ -495,7 +494,7 @@ def show_general_management_dialog():
                     df_preview = pd.DataFrame(processed_rows)
                     
                     st.markdown(f"### 🕵️ 預覽結果 ({len(df_preview)} 筆)")
-                    st.caption("請檢查電話欄位是否只剩下數字：")
+                    st.caption("請檢查：個人手機、tel、爸、媽 是否已正確分開？")
                     st.dataframe(df_preview, use_container_width=True)
                     
                     if st.button("✅ 確認寫入資料庫", type="primary"):
