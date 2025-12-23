@@ -365,10 +365,10 @@ def show_general_management_dialog():
         student_map[label] = s
     
     with tab1:
-        st.caption("🎓 學生名單管理 (精準對應版)")
+        st.caption("🎓 學生名單管理 (自動去稱謂版)")
         
         with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=True):
-            st.info("💡 請在下方選單分別指定「學生手機」與「家長電話」的欄位。")
+            st.info("💡 系統會自動移除「父親:」、「tel:」等稱謂，只保留號碼。")
             uploaded_file = st.file_uploader("上傳原始 Excel/CSV 檔", type=['csv', 'xlsx'])
             
             if uploaded_file:
@@ -389,84 +389,94 @@ def show_general_management_dialog():
                     all_columns = list(df_raw.columns)
                     
                     st.divider()
-                    st.markdown("### 🔧 請確認欄位對應 (共 5 項)")
+                    st.markdown("### 🔧 欄位對應設定")
                     
-                    # 定義智慧搜尋函式
-                    def get_idx(options, keywords):
-                        for i, opt in enumerate(options):
+                    def get_idx(keywords):
+                        for i, opt in enumerate(all_columns):
                             if any(k in opt for k in keywords): return i
                         return 0
 
-                    c_sel1, c_sel2 = st.columns(2)
-                    col_name = c_sel1.selectbox("1. 姓名欄位", all_columns, index=get_idx(all_columns, ['姓名', 'Name']))
-                    col_grade = c_sel2.selectbox("2. 年級欄位", all_columns, index=get_idx(all_columns, ['年級', 'Grade']))
+                    # 第一排
+                    c1, c2, c3 = st.columns(3)
+                    col_name = c1.selectbox("1. 姓名", all_columns, index=get_idx(['姓名', 'Name']))
+                    col_grade = c2.selectbox("2. 年級", all_columns, index=get_idx(['年級', 'Grade']))
+                    col_course = c3.selectbox("3. 課程 (會自動拆分)", all_columns, index=get_idx(['課程', '班別', 'Class', '報名']))
+
+                    # 第二排
+                    st.caption("請選擇對應的電話欄位 (系統將自動清除文字，只留號碼)：")
+                    c4, c5 = st.columns(2)
+                    col_stu_mobile = c4.selectbox("4. 學生手機 (個人手機)", all_columns, index=get_idx(['學生', '手機', 'Mobile']))
+                    col_home_tel = c5.selectbox("5. 市話 (tel/家裡)", all_columns, index=get_idx(['tel', '市話', '家裡', 'Home']))
                     
-                    c_sel3, c_sel4 = st.columns(2)
-                    # 獨立出學生手機與家長電話
-                    col_stu_phone = c_sel3.selectbox("3. 學生手機欄位", all_columns, index=get_idx(all_columns, ['學生', 'Student']))
-                    col_parent_phone = c_sel4.selectbox("4. 家長電話欄位 (含稱謂)", all_columns, index=get_idx(all_columns, ['家長', 'Parent', '父母']))
-                    
-                    col_course = st.selectbox("5. 課程欄位", all_columns, index=get_idx(all_columns, ['課程', '班別', 'Class', '報名']))
+                    c6, c7 = st.columns(2)
+                    col_dad = c6.selectbox("6. 爸爸電話", all_columns, index=get_idx(['爸', '父', 'Dad']))
+                    col_mom = c7.selectbox("7. 媽媽電話", all_columns, index=get_idx(['媽', '母', 'Mom']))
 
                     st.divider()
-                    st.write(f"正在讀取並拆解資料...")
 
                     # --- 2. 轉換邏輯 ---
                     processed_rows = []
                     
+                    target_cols = {
+                        "name": col_name, "grade": col_grade, "course": col_course,
+                        "stu_mob": col_stu_mobile, "home": col_home_tel,
+                        "dad": col_dad, "mom": col_mom
+                    }
+
+                    # ★ 定義強力清潔函式 ★
+                    def clean_phone_number(val):
+                        if pd.isna(val): return ""
+                        text = str(val).strip()
+                        if not text or text.lower() == 'nan': return ""
+                        
+                        # 定義要移除的雜訊關鍵字 (包含中英文、全形半形)
+                        noise_words = [
+                            "父親", "爸爸", "父", "Dad", "dad", "Father",
+                            "母親", "媽媽", "母", "Mom", "mom", "Mother",
+                            "家裡", "市話", "住家", "Home", "home", "Tel", "tel", "TEL",
+                            "學生", "個人", "手機", "Mobile", "mobile",
+                            ":", "：", "(", ")", "（", "）", " " # 移除冒號、括號與空格
+                        ]
+                        
+                        # 迴圈移除所有雜訊
+                        for word in noise_words:
+                            text = text.replace(word, "")
+                        
+                        # 處理 Excel 可能殘留的換行
+                        text = text.replace("_x000D_", "").replace("\n", "").replace("\r", "")
+                        
+                        return text.strip()
+
                     for index, row in df_raw.iterrows():
-                        # 安全讀取字串函式
-                        def get_val(col_name):
-                            val = row.get(col_name)
-                            if pd.isna(val) or str(val).lower() == 'nan': return ""
+                        # 安全讀取
+                        def get_raw_val(col_key):
+                            col = target_cols[col_key]
+                            val = row.get(col)
+                            if pd.isna(val): return ""
                             return str(val).strip()
 
                         # A. 基礎資料
-                        base_name = get_val(col_name)
-                        if not base_name: continue # 沒名字就跳過
-                        base_grade = get_val(col_grade)
+                        base_name = get_raw_val("name")
+                        if not base_name or base_name.lower() == 'nan': continue
                         
-                        # B. 電話處理 (分開處理)
-                        
-                        # B-1. 學生手機 (直接讀取，不進行拆解)
-                        val_stu_phone = get_val(col_stu_phone)
-                        # 簡單過濾一下非數字內容(可選)，這裡先照單全收
-                        
-                        # B-2. 家長電話 (需要解析 \n 和 稱謂)
-                        val_parent_raw = get_val(col_parent_phone)
-                        
+                        # 年級不做去雜訊，直接讀
+                        base_grade = str(row.get(target_cols["grade"])).strip()
+                        if base_grade.lower() == 'nan': base_grade = ""
+
+                        # B. 電話資料 (使用 clean_phone_number)
                         contact_info = {
-                            "學生手機": val_stu_phone,
-                            "爸爸": "", "媽媽": "", "家裡": "", "其他家人": ""
+                            "學生手機": clean_phone_number(row.get(target_cols["stu_mob"])),
+                            "家裡": clean_phone_number(row.get(target_cols["home"])),
+                            "爸爸": clean_phone_number(row.get(target_cols["dad"])),
+                            "媽媽": clean_phone_number(row.get(target_cols["mom"])),
+                            "其他家人": ""
                         }
 
-                        if val_parent_raw:
-                            # 處理換行
-                            txt = val_parent_raw.replace("_x000D_", "\n").replace("\r", "\n")
-                            segments = txt.split('\n')
-                            
-                            for seg in segments:
-                                seg = seg.strip()
-                                if not seg: continue
-                                
-                                # 關鍵字判斷歸類
-                                if "父" in seg:
-                                    contact_info["爸爸"] = seg.replace("父親:", "").replace("父親", "").replace(":", "").strip()
-                                elif "母" in seg:
-                                    contact_info["媽媽"] = seg.replace("母親:", "").replace("母親", "").replace(":", "").strip()
-                                elif "家" in seg:
-                                    contact_info["家裡"] = seg.replace("家裡:", "").replace("家裡", "").replace(":", "").strip()
-                                else:
-                                    # 如果沒標籤，優先填入爸爸，再填媽媽
-                                    if not contact_info["爸爸"]: contact_info["爸爸"] = seg
-                                    elif not contact_info["媽媽"]: contact_info["媽媽"] = seg
-                                    else: contact_info["其他家人"] += f" {seg}"
-
                         # C. 課程處理
-                        raw_courses = get_val(col_course)
+                        raw_courses = row.get(target_cols["course"])
                         courses_list = []
-                        if raw_courses:
-                            txt = raw_courses.replace("_x000D_", "\n").replace("\r", "\n")
+                        if pd.notna(raw_courses):
+                            txt = str(raw_courses).replace("_x000D_", "\n").replace("\r", "\n")
                             split_c = txt.split('\n')
                             courses_list = [c.strip() for c in split_c if c.strip()]
 
@@ -485,6 +495,7 @@ def show_general_management_dialog():
                     df_preview = pd.DataFrame(processed_rows)
                     
                     st.markdown(f"### 🕵️ 預覽結果 ({len(df_preview)} 筆)")
+                    st.caption("請檢查電話欄位是否只剩下數字：")
                     st.dataframe(df_preview, use_container_width=True)
                     
                     if st.button("✅ 確認寫入資料庫", type="primary"):
@@ -492,9 +503,9 @@ def show_general_management_dialog():
                             final_data = df_preview.to_dict('records')
                             current_data = get_students_data_cached()
                             save_students_data(current_data + final_data)
-                            st.success(f"成功匯入 {len(final_data)} 筆！")
+                            st.success(f"成功匯入 {len(final_data)} 筆資料！")
                         else:
-                            st.error("沒有產出任何資料，請檢查欄位選擇是否正確。")
+                            st.error("沒有資料被產出")
                         
                 except Exception as e:
                     st.error(f"錯誤: {e}")
@@ -505,7 +516,6 @@ def show_general_management_dialog():
 
         # 手動新增保留
         with st.expander("手動新增學生"):
-            # (這裡保留原本的內容)
             st.caption("💡 若為舊生加新班，可直接選取姓名帶入資料")
             select_existing = st.selectbox("快速帶入舊生資料 (可選)", ["不使用"] + list(student_map.keys()))
             
