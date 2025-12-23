@@ -365,10 +365,10 @@ def show_general_management_dialog():
         student_map[label] = s
     
     with tab1:
-        st.caption("🎓 學生名單管理 (萬能匯入版)")
+        st.caption("🎓 學生名單管理 (精準對應版)")
         
         with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=True):
-            st.info("💡 上傳後，請在下方選單確認對應的欄位名稱。")
+            st.info("💡 請在下方選單分別指定「學生手機」與「家長電話」的欄位。")
             uploaded_file = st.file_uploader("上傳原始 Excel/CSV 檔", type=['csv', 'xlsx'])
             
             if uploaded_file:
@@ -389,20 +389,24 @@ def show_general_management_dialog():
                     all_columns = list(df_raw.columns)
                     
                     st.divider()
-                    st.markdown("### 🔧 請確認欄位對應")
-                    c_sel1, c_sel2 = st.columns(2)
-                    c_sel3, c_sel4 = st.columns(2)
+                    st.markdown("### 🔧 請確認欄位對應 (共 5 項)")
                     
-                    # 智慧預選：嘗試自動抓取可能的欄位名
+                    # 定義智慧搜尋函式
                     def get_idx(options, keywords):
                         for i, opt in enumerate(options):
                             if any(k in opt for k in keywords): return i
                         return 0
 
-                    col_name = c_sel1.selectbox("姓名欄位", all_columns, index=get_idx(all_columns, ['姓名', 'Name']))
-                    col_grade = c_sel2.selectbox("年級欄位", all_columns, index=get_idx(all_columns, ['年級', 'Grade']))
-                    col_phone = c_sel3.selectbox("電話欄位 (含父母)", all_columns, index=get_idx(all_columns, ['電話', 'Phone', '家長', '連絡']))
-                    col_course = c_sel4.selectbox("課程欄位", all_columns, index=get_idx(all_columns, ['課程', '班別', 'Class', '報名']))
+                    c_sel1, c_sel2 = st.columns(2)
+                    col_name = c_sel1.selectbox("1. 姓名欄位", all_columns, index=get_idx(all_columns, ['姓名', 'Name']))
+                    col_grade = c_sel2.selectbox("2. 年級欄位", all_columns, index=get_idx(all_columns, ['年級', 'Grade']))
+                    
+                    c_sel3, c_sel4 = st.columns(2)
+                    # 獨立出學生手機與家長電話
+                    col_stu_phone = c_sel3.selectbox("3. 學生手機欄位", all_columns, index=get_idx(all_columns, ['學生', 'Student']))
+                    col_parent_phone = c_sel4.selectbox("4. 家長電話欄位 (含稱謂)", all_columns, index=get_idx(all_columns, ['家長', 'Parent', '父母']))
+                    
+                    col_course = st.selectbox("5. 課程欄位", all_columns, index=get_idx(all_columns, ['課程', '班別', 'Class', '報名']))
 
                     st.divider()
                     st.write(f"正在讀取並拆解資料...")
@@ -411,38 +415,41 @@ def show_general_management_dialog():
                     processed_rows = []
                     
                     for index, row in df_raw.iterrows():
-                        # Helper function to safely get string
-                        def get_val(col):
-                            val = row.get(col)
+                        # 安全讀取字串函式
+                        def get_val(col_name):
+                            val = row.get(col_name)
                             if pd.isna(val) or str(val).lower() == 'nan': return ""
                             return str(val).strip()
 
                         # A. 基礎資料
                         base_name = get_val(col_name)
                         if not base_name: continue # 沒名字就跳過
-
                         base_grade = get_val(col_grade)
                         
-                        # B. 電話處理
-                        raw_parent_phone = get_val(col_phone)
-                        # 嘗試抓學生電話 (如果有的話，沒有就留空)
-                        raw_stu_phone = "" 
-                        # 這裡簡化，假設"電話欄位"就是包含所有資訊的那一欄
-
+                        # B. 電話處理 (分開處理)
+                        
+                        # B-1. 學生手機 (直接讀取，不進行拆解)
+                        val_stu_phone = get_val(col_stu_phone)
+                        # 簡單過濾一下非數字內容(可選)，這裡先照單全收
+                        
+                        # B-2. 家長電話 (需要解析 \n 和 稱謂)
+                        val_parent_raw = get_val(col_parent_phone)
+                        
                         contact_info = {
-                            "學生手機": raw_stu_phone,
+                            "學生手機": val_stu_phone,
                             "爸爸": "", "媽媽": "", "家裡": "", "其他家人": ""
                         }
 
-                        if raw_parent_phone:
+                        if val_parent_raw:
                             # 處理換行
-                            txt = raw_parent_phone.replace("_x000D_", "\n").replace("\r", "\n")
+                            txt = val_parent_raw.replace("_x000D_", "\n").replace("\r", "\n")
                             segments = txt.split('\n')
                             
                             for seg in segments:
                                 seg = seg.strip()
                                 if not seg: continue
                                 
+                                # 關鍵字判斷歸類
                                 if "父" in seg:
                                     contact_info["爸爸"] = seg.replace("父親:", "").replace("父親", "").replace(":", "").strip()
                                 elif "母" in seg:
@@ -498,8 +505,7 @@ def show_general_management_dialog():
 
         # 手動新增保留
         with st.expander("手動新增學生"):
-            # (這裡省略原本的內容，實際上請保留原本的手動新增程式碼，與上一版相同)
-            # 為節省篇幅，請直接沿用原本的內容
+            # (這裡保留原本的內容)
             st.caption("💡 若為舊生加新班，可直接選取姓名帶入資料")
             select_existing = st.selectbox("快速帶入舊生資料 (可選)", ["不使用"] + list(student_map.keys()))
             
