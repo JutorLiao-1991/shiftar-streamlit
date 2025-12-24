@@ -269,9 +269,9 @@ def log_cleaning(area, user):
     st.toast(f"✨ {area} 清潔完成！", icon="🧹")
 
 # --- 4. 彈出視窗 UI ---
-
 @st.dialog("✏️ 編輯/刪除 行程")
 def show_edit_event_dialog(event_id, props):
+    # 1. 國定假日防呆
     if props.get('type') == 'holiday':
         st.warning("🌴 這是國定假日，無法編輯。")
         if st.button("關閉"): st.rerun()
@@ -279,32 +279,122 @@ def show_edit_event_dialog(event_id, props):
 
     st.write(f"正在編輯：**{props.get('title', '')}**")
     
+    # 2. 解析目前的時間 (從 FullCalendar props 取得)
+    # props['start'] 可能是 '2025-12-31T18:30:00+08:00' 或 '2025-12-31'
+    try:
+        start_str = props.get('start')
+        end_str = props.get('end')
+        
+        # 處理 Start
+        if "T" in start_str:
+            s_dt = datetime.datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            # 轉換為本地時間顯示
+            if s_dt.tzinfo: s_dt = s_dt.astimezone(pytz.timezone('Asia/Taipei'))
+            default_date = s_dt.date()
+            default_s_time = s_dt.strftime("%H:%M")
+        else:
+            # All Day 事件
+            s_dt = datetime.datetime.strptime(start_str, "%Y-%m-%d")
+            default_date = s_dt.date()
+            default_s_time = "09:00"
+
+        # 處理 End (若無 end，預設為 start + 1小時)
+        if end_str and "T" in end_str:
+            e_dt = datetime.datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            if e_dt.tzinfo: e_dt = e_dt.astimezone(pytz.timezone('Asia/Taipei'))
+            default_e_time = e_dt.strftime("%H:%M")
+        else:
+            default_e_time = "10:00"
+            
+    except Exception as e:
+        # 發生解析錯誤時的預設值
+        default_date = datetime.date.today()
+        default_s_time = "18:00"
+        default_e_time = "21:00"
+
+    # --- 3. 根據類型顯示不同編輯介面 ---
+    
     if props.get('type') == 'shift':
+        # A. 課程編輯 (新增時間調整功能)
         new_title = st.text_input("課程名稱", props.get('title'))
+        
+        st.caption("📅 時間異動")
+        c_d, c_t1, c_t2 = st.columns([2, 1.5, 1.5])
+        new_date = c_d.date_input("日期", default_date)
+        
+        # 確保時間選項包含目前的時間，避免報錯
+        time_options = sorted(list(set(TIME_OPTIONS + [default_s_time, default_e_time, "13:30", "16:30"])))
+        
+        # 嘗試找出目前時間在選單中的 index
+        try: idx_s = time_options.index(default_s_time)
+        except: idx_s = 0
+        try: idx_e = time_options.index(default_e_time)
+        except: idx_e = min(idx_s + 2, len(time_options)-1)
+
+        new_start_time = c_t1.selectbox("開始", time_options, index=idx_s)
+        new_end_time = c_t2.selectbox("結束", time_options, index=idx_e)
+
+        st.divider()
         col1, col2 = st.columns(2)
+        
         if col1.button("💾 儲存修改", type="primary"):
-            update_event_in_db(event_id, {"title": new_title})
+            # 組合新的 ISO 時間字串
+            s_dt_new = datetime.datetime.combine(new_date, datetime.datetime.strptime(new_start_time, "%H:%M").time())
+            e_dt_new = datetime.datetime.combine(new_date, datetime.datetime.strptime(new_end_time, "%H:%M").time())
+            
+            update_event_in_db(event_id, {
+                "title": new_title,
+                "start": s_dt_new.isoformat(),
+                "end": e_dt_new.isoformat()
+            })
             st.rerun()
+            
         if col2.button("🗑️ 刪除此課程", type="secondary"):
             delete_event_from_db(event_id)
             st.rerun()
 
     elif props.get('type') == 'part_time':
+        # B. 工讀生編輯 (也可以改時間)
         new_staff = st.text_input("工讀生姓名", props.get('staff'))
+        
+        st.caption("📅 時間異動")
+        c_d, c_t1, c_t2 = st.columns([2, 1.5, 1.5])
+        new_date = c_d.date_input("日期", default_date)
+        
+        time_options = sorted(list(set(TIME_OPTIONS + [default_s_time, default_e_time])))
+        try: idx_s = time_options.index(default_s_time)
+        except: idx_s = 0
+        try: idx_e = time_options.index(default_e_time)
+        except: idx_e = 0
+        
+        new_start_time = c_t1.selectbox("上班", time_options, index=idx_s)
+        new_end_time = c_t2.selectbox("下班", time_options, index=idx_e)
+
         col1, col2 = st.columns(2)
         if col1.button("💾 儲存修改", type="primary"):
-            update_event_in_db(event_id, {"staff": new_staff})
+            s_dt_new = datetime.datetime.combine(new_date, datetime.datetime.strptime(new_start_time, "%H:%M").time())
+            e_dt_new = datetime.datetime.combine(new_date, datetime.datetime.strptime(new_end_time, "%H:%M").time())
+            
+            update_event_in_db(event_id, {
+                "staff": new_staff,
+                "start": s_dt_new.isoformat(),
+                "end": e_dt_new.isoformat()
+            })
             st.rerun()
         if col2.button("🗑️ 刪除此班表", type="secondary"):
             delete_event_from_db(event_id)
             st.rerun()
             
     elif props.get('type') == 'notice':
+        # C. 公告編輯
         cat_opts = ["調課", "考試", "活動", "任務", "其他"]
         curr_cat = props.get('category', '其他')
         idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 4
         new_cat = st.selectbox("分類", cat_opts, index=idx)
         new_content = st.text_area("內容", props.get('title')) 
+        
+        # 公告通常不需要改時間，但如果有需要也可以加
+        
         col1, col2 = st.columns(2)
         if col1.button("💾 儲存修改", type="primary"):
             update_event_in_db(event_id, {"title": new_content, "category": new_cat})
@@ -316,6 +406,7 @@ def show_edit_event_dialog(event_id, props):
         if st.button("🗑️ 強制刪除", type="secondary"):
             delete_event_from_db(event_id)
             st.rerun()
+
 
 @st.dialog("📢 新增公告 / 交接")
 def show_notice_dialog(default_date=None):
