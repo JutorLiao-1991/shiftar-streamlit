@@ -845,9 +845,10 @@ def show_admin_dialog():
                 st.session_state['preview_schedule'] = None
                 st.rerun()
 
+# 工讀生排班：分週次表格 (週曆模式) - 改良版 (防止日期拖曳)
     with tab2:
-        st.subheader("👷 工讀生排班系統 (含記憶修改)")
-        st.caption("系統會自動帶出已排班表。勾選代表上班，取消勾選代表刪除班表。")
+        st.subheader("👷 工讀生排班系統 (防拖曳版)")
+        st.caption("已鎖定日期欄位，避免誤觸拖曳。勾選即代表排班。")
         
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
@@ -864,6 +865,7 @@ def show_admin_dialog():
         
         st.divider()
 
+        # --- [STEP 1] 讀取現有班表 ---
         start_of_month = datetime.datetime(pt_year, pt_month, 1)
         end_of_month = start_of_month + relativedelta(months=1)
         
@@ -885,11 +887,15 @@ def show_admin_dialog():
 
         st.write(f"正在編輯 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的班表：")
         
-        cols = st.columns(7)
+        # --- [STEP 2] 生成月曆 (使用 st.columns 鎖定排版) ---
+        
+        # 1. 星期標題
+        cols_header = st.columns(7)
         weekdays = ["日", "一", "二", "三", "四", "五", "六"] 
         for idx, w in enumerate(weekdays):
-            cols[idx].markdown(f"**{w}**")
+            cols_header[idx].markdown(f"<div style='text-align: center; font-weight: bold; color: #666;'>{w}</div>", unsafe_allow_html=True)
             
+        # 2. 計算日期
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         all_dates = [datetime.date(pt_year, pt_month, d) for d in range(1, num_days + 1)]
         
@@ -914,42 +920,36 @@ def show_admin_dialog():
             
         final_selected_dates = []
         
-        for w_idx, week_dates in enumerate(weeks):
-            col_names = [f"c{i}" for i in range(7)]
-            row_data = {}
-            col_config = {}
-            date_map = {}
-            
+        # 3. 渲染每一週 (使用 Container + Checkbox)
+        for week_dates in weeks:
+            cols = st.columns(7) # 每一週固定 7 欄，絕對不會歪掉
             for i, d in enumerate(week_dates):
-                col_key = col_names[i]
-                if d:
-                    is_checked = d in existing_shifts_map
-                    col_config[col_key] = st.column_config.CheckboxColumn(
-                        label=str(d.day), 
-                        default=False
-                    )
-                    row_data[col_key] = is_checked
-                    date_map[col_key] = d
-                else:
-                    col_config[col_key] = st.column_config.Column(label=" ", disabled=True)
-                    row_data[col_key] = False 
-            
-            df_week = pd.DataFrame([row_data]) 
-            
-            edited_week = st.data_editor(
-                df_week,
-                column_config=col_config,
-                hide_index=True,
-                use_container_width=True,
-                key=f"week_grid_{pt_year}_{pt_month}_{w_idx}" 
-            )
-            
-            for col in edited_week.columns:
-                if col in date_map and edited_week[col][0]:
-                    final_selected_dates.append(date_map[col])
+                with cols[i]:
+                    if d:
+                        # 使用框線容器，讓它看起來像月曆格子
+                        with st.container(border=True):
+                            # 日期數字 (置中)
+                            st.markdown(f"<div style='text-align: center; font-weight: bold; margin-bottom: 5px;'>{d.day}</div>", unsafe_allow_html=True)
+                            
+                            is_checked = d in existing_shifts_map
+                            
+                            # 勾選框 (隱藏標籤，只留框框)
+                            # key 必須包含人名與日期，確保唯一性
+                            val = st.checkbox(
+                                "排班", 
+                                value=is_checked, 
+                                key=f"chk_{pt_name}_{d}", 
+                                label_visibility="collapsed"
+                            )
+                            
+                            if val:
+                                final_selected_dates.append(d)
+                    else:
+                        st.write("") # 空白日佔位
         
         st.divider()
         
+        # --- [STEP 3] 存檔邏輯 (保持不變) ---
         if st.button(f"💾 儲存變更", type="primary", key="save_pt_table"):
             current_selected_set = set(final_selected_dates)
             original_set = set(existing_shifts_map.keys())
@@ -980,7 +980,7 @@ def show_admin_dialog():
                 st.success(f"更新成功！({', '.join(msg)})")
                 time.sleep(1)
                 st.rerun()
-
+                
     with tab3:
         st.subheader("👨‍🏫 師資薪資設定")
         with st.form("add_teacher"):
