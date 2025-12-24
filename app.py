@@ -1054,7 +1054,7 @@ if cal.get("eventClick"):
     if st.session_state['user']:
         show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 (自動同步版) ---
+# --- 6. 智慧點名系統 (課程優先分組版) ---
 st.divider()
 st.subheader("📋 每日點名")
 
@@ -1075,13 +1075,18 @@ with col_date_info:
 date_key = selected_date.isoformat()
 db_record = get_roll_call_from_db(date_key)
 
-# 抓取資料
+# 1. 抓取資料並建立「課程 -> 學生名單」的索引 (解決同名不同班問題)
 all_students = get_students_data_cached()
-student_course_map = {s['姓名']: s.get('班別', '未分班') for s in all_students}
+course_to_students_map = defaultdict(list) # 關鍵修改：建立 班級 -> [學生A, 學生B...]
+for s in all_students:
+    c = s.get('班別')
+    n = s.get('姓名')
+    if c and n:
+        course_to_students_map[c].append(n)
 
-# 準備當日課程 & 地點對照表
+# 2. 準備當日課程 & 地點對照表
 daily_courses_display = []
-daily_courses_filter = []
+daily_courses_filter = []     # 這是今天「真正有開」的課
 course_location_map = {} 
 
 for e in all_events:
@@ -1098,7 +1103,7 @@ for e in all_events:
         if c_loc: daily_courses_display.append(f"{c_title} ({c_loc})")
         else: daily_courses_display.append(c_title)
 
-# 抓取「現在課表上」應到的學生
+# 3. 抓取「現在課表上」應到的學生 (這部分邏輯原本就是對的，因為它是逐列掃描)
 target_students = []
 if daily_courses_display:
     st.caption(f"當日課程：{'、'.join(daily_courses_display)}")
@@ -1117,21 +1122,13 @@ if db_record:
     if "present" not in current_data: current_data["present"] = []
     if "leave" not in current_data: current_data["leave"] = []
     
-    # ★ 自動同步：檢查是否有「新課表」的學生不在「舊紀錄」裡
-    # 1. 取得目前紀錄中所有的學生
+    # 自動同步：補入漏掉的學生
     recorded_students = set(current_data["absent"] + current_data["present"] + current_data["leave"])
-    
-    # 2. 找出漏掉的學生 (課表有，但紀錄沒有)
     missing_students = [s for s in target_students if s not in recorded_students]
     
-    # 3. 如果有漏掉，自動補入「未到」
     if missing_students:
         current_data["absent"].extend(missing_students)
-        # 這裡不自動刪除多餘的人 (例如高二物理)，以免誤刪手動加入的學生
-        # 讓老師自己決定是否保留舊名單，或下次手動清除
-        
 else:
-    # 若完全無紀錄，直接採用今日課表
     current_data = {"absent": target_students, "present": [], "leave": []}
 
 def save_current_state(absent, present, leave):
@@ -1165,52 +1162,74 @@ if st.session_state['user']:
         st.markdown("### 🔴 尚未報到")
         st.caption("💡 點擊姓名即可選取，再次點擊取消。")
         
-        pending_list = current_data['absent']
+        pending_list = set(current_data['absent']) # 轉成 set 加速查找
         
         if pending_list:
-            pending_by_course = {}
-            for name in pending_list:
-                course = student_course_map.get(name, '其他')
-                if course not in pending_by_course: pending_by_course[course] = []
-                pending_by_course[course].append(name)
-            
-            sorted_courses = sorted(pending_by_course.keys())
-            
             all_selected_present = []
             all_selected_leave = []
+            
+            # 用來記錄哪些學生已經被歸類顯示了 (避免重複或漏網之魚)
+            displayed_students = set()
 
-            for course_name in sorted_courses:
-                s_list = pending_by_course[course_name]
+            # ★ 關鍵修正：依照「今日課程 (daily_courses_filter)」來產生分類
+            # 這樣就絕對不會跑出今天沒開的課 (如高二物理)
+            sorted_today_courses = sorted(list(set(daily_courses_filter)))
+            
+            for course_name in sorted_today_courses:
+                # 找出「這堂課」的所有學生
+                students_in_this_course = course_to_students_map.get(course_name, [])
                 
-                loc_str = course_location_map.get(course_name, "")
-                title_suffix = f" @ {loc_str}" if loc_str else ""
+                # 篩選出「這堂課」且「目前未到」的學生
+                # 這樣黃冠穎雖然在數學班也有名單，但數學班今天不會被跑迴圈，所以他只會出現在英文班
+                s_list = [s for s in students_in_this_course if s in pending_list]
                 
-                # 這裡會顯示所有分類，包含舊的高二物理(如果有殘留)和新的學測英文
-                with st.expander(f"📘 {course_name}{title_suffix} ({len(s_list)}人)", expanded=True):
+                if s_list:
+                    # 標記這些人已顯示
+                    displayed_students.update(s_list)
                     
-                    st.markdown("**👇 點擊出席學生 (到)**")
-                    selected_p = st.pills(
-                        f"pills_present_{course_name}",
-                        options=s_list,
-                        selection_mode="multi",
-                        key=f"pills_p_{course_name}_{date_key}",
-                        label_visibility="collapsed"
-                    )
+                    loc_str = course_location_map.get(course_name, "")
+                    title_suffix = f" @ {loc_str}" if loc_str else ""
                     
-                    remaining_for_leave = [s for s in s_list if s not in selected_p]
-                    
-                    if remaining_for_leave:
-                        st.markdown("**👇 點擊請假學生 (假)**")
-                        selected_l = st.pills(
-                            f"pills_leave_{course_name}",
-                            options=remaining_for_leave,
+                    with st.expander(f"📘 {course_name}{title_suffix} ({len(s_list)}人)", expanded=True):
+                        st.markdown("**👇 點擊出席學生 (到)**")
+                        selected_p = st.pills(
+                            f"pills_present_{course_name}",
+                            options=s_list,
                             selection_mode="multi",
-                            key=f"pills_l_{course_name}_{date_key}",
+                            key=f"pills_p_{course_name}_{date_key}",
                             label_visibility="collapsed"
                         )
-                        all_selected_leave.extend(selected_l)
+                        
+                        remaining_for_leave = [s for s in s_list if s not in selected_p]
+                        
+                        if remaining_for_leave:
+                            st.markdown("**👇 點擊請假學生 (假)**")
+                            selected_l = st.pills(
+                                f"pills_leave_{course_name}",
+                                options=remaining_for_leave,
+                                selection_mode="multi",
+                                key=f"pills_l_{course_name}_{date_key}",
+                                label_visibility="collapsed"
+                            )
+                            all_selected_leave.extend(selected_l)
+                        
+                        all_selected_present.extend(selected_p)
+
+            # 處理「漏網之魚」：在未到名單中，但卻不屬於今天任何一堂課的學生
+            # (可能是手動加的，或是舊資料殘留)
+            leftover_students = [s for s in pending_list if s not in displayed_students]
+            if leftover_students:
+                with st.expander(f"❓ 其他 / 未分類 ({len(leftover_students)}人)", expanded=True):
+                    st.caption("這些學生不在今日排定的課程名單中，但出現在未到列表")
+                    st.markdown("**👇 點擊出席學生 (到)**")
+                    l_p = st.pills("pills_other_p", options=leftover_students, selection_mode="multi", key=f"p_other_{date_key}")
                     
-                    all_selected_present.extend(selected_p)
+                    rem_l = [s for s in leftover_students if s not in l_p]
+                    if rem_l:
+                        st.markdown("**👇 點擊請假學生 (假)**")
+                        l_l = st.pills("pills_other_l", options=rem_l, selection_mode="multi", key=f"l_other_{date_key}")
+                        all_selected_leave.extend(l_l)
+                    all_selected_present.extend(l_p)
 
             st.divider()
             
@@ -1221,7 +1240,7 @@ if st.session_state['user']:
                 elif not all_selected_present and not all_selected_leave:
                     st.warning("您未選取任何學生")
                 else:
-                    new_absent = [p for p in pending_list if p not in all_selected_present and p not in all_selected_leave]
+                    new_absent = [p for p in current_data['absent'] if p not in all_selected_present and p not in all_selected_leave]
                     new_present = current_data['present'] + all_selected_present
                     new_leave = current_data['leave'] + all_selected_leave
                     save_current_state(new_absent, new_present, new_leave)
