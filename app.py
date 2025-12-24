@@ -333,13 +333,86 @@ def show_notice_dialog(default_date=None):
         st.toast("公告已發布")
         st.rerun()
 
-@st.dialog("📅 回顧點名紀錄")
+@st.dialog("📅 切換日期與檢視紀錄")
 def show_roll_call_review_dialog():
-    st.info("請選擇要查看或補點名的日期")
-    pick_date = st.date_input("選擇日期", value=datetime.date.today())
-    if st.button("確認前往", type="primary", use_container_width=True):
-        st.session_state['selected_calendar_date'] = pick_date
-        st.rerun()
+    st.caption("點擊任一列可切換至該日期進行編輯")
+    
+    # 1. 取得所有點名紀錄
+    all_records = get_all_roll_calls() # 假設這回傳 dict: {date_str: record_data}
+    if not all_records:
+        st.info("目前尚無任何點名紀錄")
+        return
+
+    # 2. 準備列表資料
+    table_data = []
+    
+    # 為了顯示地點，我們需要稍微查詢一下 Calendar (或是直接從紀錄中猜)
+    # 這裡我們用一個簡單策略：從 all_events 找當天的課程地點
+    date_loc_map = {}
+    for e in all_events:
+        start_date = e.get('start', '').split('T')[0]
+        props = e.get('extendedProps', {})
+        if props.get('type') == 'shift':
+            loc = props.get('location', '')
+            # ★ 修改點 1：強制轉換地點名稱
+            if loc == '線上': loc = '櫃台'
+            
+            if start_date not in date_loc_map:
+                date_loc_map[start_date] = []
+            if loc and loc not in date_loc_map[start_date]:
+                date_loc_map[start_date].append(loc)
+
+    # 排序：日期新到舊
+    sorted_dates = sorted(all_records.keys(), reverse=True)
+    
+    for d_str in sorted_dates:
+        rec = all_records[d_str]
+        
+        # 計算人數
+        n_present = len(rec.get('present', []))
+        n_leave = len(rec.get('leave', []))
+        n_absent = len(rec.get('absent', []))
+        total = n_present + n_leave + n_absent
+        
+        # 取得地點字串
+        locs = date_loc_map.get(d_str, [])
+        loc_display = "、".join(locs) if locs else ""
+        
+        # 產生狀態摘要
+        status_summary = f"到:{n_present} / 假:{n_leave} / 未:{n_absent}"
+        
+        table_data.append({
+            "日期": d_str,
+            "上課地點": loc_display, # ★ 修改點 2：新增地點欄位
+            "狀態": status_summary,
+            "raw_date": d_str
+        })
+    
+    # 3. 顯示互動表格 (隱藏 Month，只留日期、地點、狀態)
+    if table_data:
+        df = pd.DataFrame(table_data)
+        
+        event = st.dataframe(
+            df,
+            column_config={
+                "日期": st.column_config.TextColumn("日期", width="small"),
+                "上課地點": st.column_config.TextColumn("上課地點", width="medium"), # 顯示地點
+                "狀態": st.column_config.TextColumn("點名狀況", width="medium"),
+                "raw_date": None # 隱藏欄位
+            },
+            selection_mode="single-row",
+            on_select="rerun",
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        # 處理點擊事件
+        if len(event.selection['rows']) > 0:
+            idx = event.selection['rows'][0]
+            selected_d_str = df.iloc[idx]["raw_date"]
+            # 轉換字串回 date 物件並存入 session
+            st.session_state['selected_calendar_date'] = datetime.date.fromisoformat(selected_d_str)
+            st.rerun()
 
 @st.dialog("🎓 確認年度升級")
 def show_promotion_confirm_dialog():
@@ -980,9 +1053,9 @@ if cal.get("eventClick"):
     if st.session_state['user']:
         show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 (標籤雲極速版) ---
+# --- 6. 智慧點名系統 (標籤雲地點優化版) ---
 st.divider()
-st.subheader("📋 每日點名 (標籤雲極速版)")
+st.subheader("📋 每日點名")
 
 # 切換日期按鈕
 col_date_btn, col_date_info = st.columns([1, 3], vertical_alignment="center")
@@ -1001,20 +1074,29 @@ with col_date_info:
 date_key = selected_date.isoformat()
 db_record = get_roll_call_from_db(date_key)
 
-# 抓取所有學生與班級對照
+# 抓取資料
 all_students = get_students_data_cached()
 student_course_map = {s['姓名']: s.get('班別', '未分班') for s in all_students}
 
-# 準備比對當日課程
+# 準備當日課程 & 地點對照表
 daily_courses_display = []
 daily_courses_filter = []
+course_location_map = {} # 用來存 課程 -> 地點
 
 for e in all_events:
     if e.get('start', '').startswith(date_key) and e.get('extendedProps', {}).get('type') == 'shift':
         props = e.get('extendedProps', {})
         c_title = props.get('title', '')
         c_loc = props.get('location', '')
+        
+        # ★ 修改點 1：強制將「線上」轉為「櫃台」
+        if c_loc == "線上": c_loc = "櫃台"
+        
         daily_courses_filter.append(c_title)
+        
+        # 記錄該課程的地點，供下方分類標題使用
+        course_location_map[c_title] = c_loc
+        
         if c_loc: daily_courses_display.append(f"{c_title} ({c_loc})")
         else: daily_courses_display.append(c_title)
 
@@ -1052,10 +1134,9 @@ def save_current_state(absent, present, leave):
     time.sleep(0.5)
     st.rerun()
 
-# --- CSS 微調：讓 Pills 更明顯 ---
+# --- CSS ---
 st.markdown("""
 <style>
-    /* 調整 Expander 的間距，讓畫面更緊湊 */
     .streamlit-expanderContent {
         padding-top: 0rem !important;
         padding-bottom: 0.5rem !important;
@@ -1067,14 +1148,13 @@ if st.session_state['user']:
     if not target_students and not current_data['absent'] and not current_data['present'] and not current_data['leave']:
         st.info("今日無課程或無學生名單，無須點名")
     else:
-        # === A. 主要操作區：尚未報到 (分類標籤雲) ===
+        # === A. 尚未報到 ===
         st.markdown("### 🔴 尚未報到")
-        st.caption("💡 直接點擊姓名即可選取，再次點擊取消。")
+        st.caption("💡 點擊姓名即可選取，再次點擊取消。")
         
         pending_list = current_data['absent']
         
         if pending_list:
-            # 1. 依照班級分組
             pending_by_course = {}
             for name in pending_list:
                 course = student_course_map.get(name, '其他')
@@ -1083,22 +1163,19 @@ if st.session_state['user']:
             
             sorted_courses = sorted(pending_by_course.keys())
             
-            # 用來收集所有被選中的學生
             all_selected_present = []
             all_selected_leave = []
 
-            # 2. 顯示每個班級的區塊
             for course_name in sorted_courses:
                 s_list = pending_by_course[course_name]
                 
-                # 使用 Expander 收納，預設展開，讓版面整齊
-                with st.expander(f"📘 {course_name} ({len(s_list)}人)", expanded=True):
+                # ★ 修改點 2：標題加上地點資訊
+                loc_str = course_location_map.get(course_name, "")
+                title_suffix = f" @ {loc_str}" if loc_str else ""
+                
+                with st.expander(f"📘 {course_name}{title_suffix} ({len(s_list)}人)", expanded=True):
                     
-                    # ★ 核心元件：st.pills (需要 Streamlit >= 1.40)
-                    # 第一排：選「到班」的人
-                    st.markdown("**👇 點擊出席學生 (到班)**")
-                    
-                    # 注意：st.pills 回傳的是一個 list (被選中的項目)
+                    st.markdown("**👇 點擊出席學生 (到)**")
                     selected_p = st.pills(
                         f"pills_present_{course_name}",
                         options=s_list,
@@ -1107,11 +1184,10 @@ if st.session_state['user']:
                         label_visibility="collapsed"
                     )
                     
-                    # 計算剩餘還沒被選為到班的人，供請假選單使用
                     remaining_for_leave = [s for s in s_list if s not in selected_p]
                     
                     if remaining_for_leave:
-                        st.markdown("**👇 點擊請假學生 (請假)**")
+                        st.markdown("**👇 點擊請假學生 (假)**")
                         selected_l = st.pills(
                             f"pills_leave_{course_name}",
                             options=remaining_for_leave,
@@ -1125,9 +1201,7 @@ if st.session_state['user']:
 
             st.divider()
             
-            # 確認按鈕
             if st.button("🚀 確認送出 (更新狀態)", type="primary", use_container_width=True):
-                # 再次檢查衝突 (雖然 UI 邏輯上盡量避免了)
                 conflict = set(all_selected_present) & set(all_selected_leave)
                 if conflict:
                     st.error(f"錯誤：{', '.join(conflict)} 不能同時選取")
@@ -1143,12 +1217,10 @@ if st.session_state['user']:
 
         st.divider()
 
-        # === B. 反悔區 (使用 Pills 呈現，點擊移除) ===
+        # === B. 反悔區 ===
         with st.expander(f"已到 ({len(current_data['present'])}) / 請假 ({len(current_data['leave'])})", expanded=False):
-            
             if current_data['present']:
                 st.write("**🟢 已到 (點選以取消)**")
-                # 這裡使用 pills，讓使用者可以多選取消，或者單選取消
                 undo_p = st.pills("undo_present", options=current_data['present'], selection_mode="multi", key=f"undo_p_{date_key}")
                 if undo_p:
                     if st.button("↩️ 還原選取的學生 (移回未到)", key="btn_undo_p"):
