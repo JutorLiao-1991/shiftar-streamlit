@@ -174,17 +174,32 @@ def get_all_events_cached():
         for doc in docs:
             data = doc.to_dict()
             title_text = data.get("title", "")
+            
+            # 預設顏色
             color = "#3788d8"
+            text_color = "#ffffff" # 預設白字
             
             if data.get("type") == "shift":
                 teacher = data.get("teacher", "未知")
                 course = data.get("title", "課程")
                 title_text = f"{course} ({teacher})"
-                color = "#28a745"
+                color = "#28a745" # 課程綠色
+
             elif data.get("type") == "part_time":
                 staff_name = data.get("staff", "")
                 title_text = f"{staff_name}"
-                color = "#6f42c1"
+                
+                # ★★★ 工讀生專屬配色邏輯 ★★★
+                if "竣揚" in staff_name:
+                    color = "#0d6efd"     # 藍色
+                elif "世軒" in staff_name:
+                    color = "#ffc107"     # 黃色
+                    text_color = "#000000" # 黃底配黑字才清楚
+                elif "暐傑" in staff_name:
+                    color = "#6f42c1"     # 紫色
+                else:
+                    color = "#6c757d"     # 其他工讀生顯示灰色
+
             elif data.get("type") == "notice":
                 category = data.get("category", "其他")
                 title_text = f"[{category}] {title_text}"
@@ -194,7 +209,7 @@ def get_all_events_cached():
                 elif category == "任務": 
                     color = "#FF4500"
                     title_text = f"🔥 {title_text}"
-                else: color = "#ffc107"
+                else: color = "#ffc107"; text_color = "#000000"
             
             sanitized_props = {}
             for k, v in data.items():
@@ -208,12 +223,14 @@ def get_all_events_cached():
                 "title": title_text, 
                 "start": data.get("start"), 
                 "end": data.get("end"),
-                "color": color, 
+                "color": color,
+                "textColor": text_color, # 加入文字顏色設定
                 "allDay": data.get("type") == "notice",
                 "extendedProps": sanitized_props
             })
     except: pass
     
+    # 國定假日 (保持不變)
     try:
         year = datetime.date.today().year
         resp = requests.get(f"https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json").json()
