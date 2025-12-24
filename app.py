@@ -430,6 +430,7 @@ def show_promotion_confirm_dialog():
         st.rerun()
 
 @st.dialog("📂 資料管理")
+@st.dialog("📂 資料管理")
 def show_general_management_dialog():
     tab1, tab2 = st.tabs(["🎓 學生名單", "👷 工讀生名單"])
     
@@ -440,9 +441,10 @@ def show_general_management_dialog():
         student_map[label] = s
     
     with tab1:
-        st.caption("🎓 學生名單管理 (關鍵字分流版)")
+        st.caption("🎓 學生名單管理 (搜尋增強版)")
         
-        with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=True):
+        # --- 1. 智慧匯入區塊 ---
+        with st.expander("📂 批次匯入 (Excel/CSV 轉換沙盒)", expanded=False):
             st.info("💡 請選擇那個「包含所有電話」的欄位，系統會根據 (個人手機/tel/爸爸/媽媽) 自動歸類。")
             uploaded_file = st.file_uploader("上傳原始 Excel/CSV 檔", type=['csv', 'xlsx'])
             
@@ -477,26 +479,20 @@ def show_general_management_dialog():
                     
                     c3, c4 = st.columns(2)
                     col_course = c3.selectbox("3. 課程欄位", all_columns, index=get_idx(['課程', '班別', 'Class', '報名']))
-                    
-                    # ★ 關鍵修改：只選一個「大雜燴」欄位
-                    col_mixed_contact = c4.selectbox("4. 綜合聯絡資訊欄位 (含tel/爸/媽/手機)", all_columns, index=get_idx(['電話', '聯絡', 'Contact', 'Tel']))
+                    col_mixed_contact = c4.selectbox("4. 綜合聯絡資訊欄位", all_columns, index=get_idx(['電話', '聯絡', 'Contact', 'Tel']))
 
                     st.divider()
 
                     # --- 2. 轉換邏輯 ---
                     processed_rows = []
 
-                    # ★ 定義號碼清洗器 (只留數字)
                     def clean_only_digits(text):
                         if not text: return ""
-                        # 移除常見雜訊，只留數字和連字號
                         import re
-                        # 替換掉所有非數字和非 - 的字元
                         clean = re.sub(r'[^\d\-]', '', text)
                         return clean
 
                     for index, row in df_raw.iterrows():
-                        # 安全讀取
                         def get_val(col):
                             val = row.get(col)
                             if pd.isna(val) or str(val).lower() == 'nan': return ""
@@ -506,47 +502,29 @@ def show_general_management_dialog():
                         if not base_name: continue
                         base_grade = get_val(col_grade)
                         
-                        # ★ 核心邏輯：解析大雜燴欄位
                         raw_contact = get_val(col_mixed_contact)
-                        
-                        contact_info = {
-                            "學生手機": "", "家裡": "", "爸爸": "", "媽媽": "", "其他家人": ""
-                        }
+                        contact_info = {"學生手機": "", "家裡": "", "爸爸": "", "媽媽": "", "其他家人": ""}
                         
                         if raw_contact:
-                            # 統一換行符號
                             txt = raw_contact.replace("_x000D_", "\n").replace("\r", "\n")
                             segments = txt.split('\n')
-                            
                             for seg in segments:
                                 seg = seg.strip()
                                 if not seg: continue
-                                
-                                # 依據你提供的關鍵字進行分流
-                                # 優先序：個人手機 -> tel -> 爸爸 -> 媽媽
-                                
                                 if "個人手機" in seg or "學生" in seg or "手機" in seg:
                                     contact_info["學生手機"] = clean_only_digits(seg)
-                                    
                                 elif "tel" in seg.lower() or "市話" in seg or "家裡" in seg:
                                     contact_info["家裡"] = clean_only_digits(seg)
-                                    
                                 elif "爸爸" in seg or "父" in seg:
                                     contact_info["爸爸"] = clean_only_digits(seg)
-                                    
                                 elif "媽媽" in seg or "母" in seg:
                                     contact_info["媽媽"] = clean_only_digits(seg)
-                                    
                                 else:
-                                    # 無法辨識的，暫存到其他
                                     clean_num = clean_only_digits(seg)
                                     if clean_num:
-                                        if not contact_info["其他家人"]:
-                                            contact_info["其他家人"] = clean_num
-                                        else:
-                                            contact_info["其他家人"] += f", {clean_num}"
+                                        if not contact_info["其他家人"]: contact_info["其他家人"] = clean_num
+                                        else: contact_info["其他家人"] += f", {clean_num}"
 
-                        # C. 課程處理
                         raw_courses = get_val(col_course)
                         courses_list = []
                         if raw_courses:
@@ -554,7 +532,6 @@ def show_general_management_dialog():
                             split_c = txt.split('\n')
                             courses_list = [c.strip() for c in split_c if c.strip()]
 
-                        # D. 建立資料
                         if not courses_list:
                             new_row = {"姓名": base_name, "年級": base_grade, "班別": "未分班"}
                             new_row.update(contact_info)
@@ -567,9 +544,7 @@ def show_general_management_dialog():
                     
                     # --- 3. 預覽與存檔 ---
                     df_preview = pd.DataFrame(processed_rows)
-                    
                     st.markdown(f"### 🕵️ 預覽結果 ({len(df_preview)} 筆)")
-                    st.caption("請檢查：個人手機、tel、爸、媽 是否已正確分開？")
                     st.dataframe(df_preview, use_container_width=True)
                     
                     if st.button("✅ 確認寫入資料庫", type="primary"):
@@ -588,7 +563,7 @@ def show_general_management_dialog():
         if st.session_state['is_admin']:
              if st.button("⬆️ 執行年度升級 (7月)", type="primary"): show_promotion_confirm_dialog()
 
-        # 手動新增保留
+        # --- 2. 手動新增 ---
         with st.expander("手動新增學生"):
             st.caption("💡 若為舊生加新班，可直接選取姓名帶入資料")
             select_existing = st.selectbox("快速帶入舊生資料 (可選)", ["不使用"] + list(student_map.keys()))
@@ -643,6 +618,66 @@ def show_general_management_dialog():
                 else:
                     if not contact_filled: st.error("請至少填寫一個家長/家裡聯絡電話")
                     else: st.error("缺必填欄位")
+
+        # --- 3. 列表與刪除 (這裡就是你要找回來的區塊！) ---
+        st.divider()
+        st.subheader("🔎 學生資料總表")
+        
+        if current_students:
+            # 資料準備
+            display_cols = ["姓名", "年級", "班別", "學生手機", "家裡", "爸爸", "媽媽", "其他家人"]
+            processed_list = []
+            for s in current_students:
+                row = {col: s.get(col, "") for col in display_cols}
+                processed_list.append(row)
+            
+            df_stu = pd.DataFrame(processed_list)
+            
+            # 搜尋與篩選 UI
+            col_search, col_filter = st.columns([2, 1])
+            search_term = col_search.text_input("🔍 搜尋姓名或電話", placeholder="輸入關鍵字...")
+            
+            all_classes = ["全部班級"] + sorted(list(set([s.get("班別", "") for s in current_students if s.get("班別")])))
+            filter_class = col_filter.selectbox("班級篩選", all_classes)
+            
+            # 邏輯篩選
+            if filter_class != "全部班級":
+                df_stu = df_stu[df_stu["班別"] == filter_class]
+                
+            if search_term:
+                mask = df_stu.apply(lambda x: x.astype(str).str.contains(search_term, case=False).any(), axis=1)
+                df_stu = df_stu[mask]
+            
+            st.caption(f"共找到 {len(df_stu)} 筆資料")
+            
+            # 顯示表格
+            st.dataframe(
+                df_stu, 
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "學生手機": st.column_config.TextColumn("學生手機", width="medium"),
+                    "爸爸": st.column_config.TextColumn("爸爸", width="medium"),
+                    "媽媽": st.column_config.TextColumn("媽媽", width="medium"),
+                }
+            )
+            
+            # 刪除功能區塊
+            st.divider()
+            with st.expander("🗑️ 刪除學生資料", expanded=False):
+                st.warning("注意：刪除後無法復原")
+                # 選單僅顯示目前篩選後的結果
+                delete_options = [f"{row['姓名']} ({row['班別']})" for index, row in df_stu.iterrows()]
+                to_del = st.multiselect("選擇要刪除的學生", delete_options)
+                
+                if to_del and st.button("確認刪除選取項目", type="primary"):
+                    # 執行刪除
+                    new_list = [s for s in current_students if f"{s.get('姓名')} ({s.get('班別')})" not in to_del]
+                    save_students_data(new_list)
+                    st.success(f"已刪除 {len(to_del)} 筆資料")
+                    st.rerun()
+        else:
+            st.info("目前還沒有學生資料，請先匯入或手動新增。")
 
     with tab2:
         st.caption("工讀生名單管理")
