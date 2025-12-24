@@ -1054,9 +1054,9 @@ if cal.get("eventClick"):
     if st.session_state['user']:
         show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 (標籤雲地點優化版) ---
+# --- 6. 智慧點名系統 (自動同步版) ---
 st.divider()
-st.subheader("📋 每日點名 (標籤雲版)")
+st.subheader("📋 每日點名")
 
 # 切換日期按鈕
 col_date_btn, col_date_info = st.columns([1, 3], vertical_alignment="center")
@@ -1082,7 +1082,7 @@ student_course_map = {s['姓名']: s.get('班別', '未分班') for s in all_stu
 # 準備當日課程 & 地點對照表
 daily_courses_display = []
 daily_courses_filter = []
-course_location_map = {} # 用來存 課程 -> 地點
+course_location_map = {} 
 
 for e in all_events:
     if e.get('start', '').startswith(date_key) and e.get('extendedProps', {}).get('type') == 'shift':
@@ -1090,7 +1090,6 @@ for e in all_events:
         c_title = props.get('title', '')
         c_loc = props.get('location', '')
         
-        # ★ 強制將「線上」轉為「櫃台」
         if c_loc == "線上": c_loc = "櫃台"
         
         daily_courses_filter.append(c_title)
@@ -1099,7 +1098,7 @@ for e in all_events:
         if c_loc: daily_courses_display.append(f"{c_title} ({c_loc})")
         else: daily_courses_display.append(c_title)
 
-# 抓取應到學生
+# 抓取「現在課表上」應到的學生
 target_students = []
 if daily_courses_display:
     st.caption(f"當日課程：{'、'.join(daily_courses_display)}")
@@ -1111,13 +1110,28 @@ else:
 
 target_students = list(set(target_students))
 
-# 決定當前點名狀態
+# 決定當前點名狀態 (含自動同步邏輯)
 if db_record:
     current_data = db_record
     if "absent" not in current_data: current_data["absent"] = []
     if "present" not in current_data: current_data["present"] = []
     if "leave" not in current_data: current_data["leave"] = []
+    
+    # ★ 自動同步：檢查是否有「新課表」的學生不在「舊紀錄」裡
+    # 1. 取得目前紀錄中所有的學生
+    recorded_students = set(current_data["absent"] + current_data["present"] + current_data["leave"])
+    
+    # 2. 找出漏掉的學生 (課表有，但紀錄沒有)
+    missing_students = [s for s in target_students if s not in recorded_students]
+    
+    # 3. 如果有漏掉，自動補入「未到」
+    if missing_students:
+        current_data["absent"].extend(missing_students)
+        # 這裡不自動刪除多餘的人 (例如高二物理)，以免誤刪手動加入的學生
+        # 讓老師自己決定是否保留舊名單，或下次手動清除
+        
 else:
+    # 若完全無紀錄，直接採用今日課表
     current_data = {"absent": target_students, "present": [], "leave": []}
 
 def save_current_state(absent, present, leave):
@@ -1132,6 +1146,16 @@ def save_current_state(absent, present, leave):
     st.toast("點名資料已儲存", icon="💾")
     time.sleep(0.5)
     st.rerun()
+
+# --- CSS ---
+st.markdown("""
+<style>
+    .streamlit-expanderContent {
+        padding-top: 0rem !important;
+        padding-bottom: 0.5rem !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 if st.session_state['user']:
     if not target_students and not current_data['absent'] and not current_data['present'] and not current_data['leave']:
@@ -1158,10 +1182,10 @@ if st.session_state['user']:
             for course_name in sorted_courses:
                 s_list = pending_by_course[course_name]
                 
-                # 標題加上地點資訊
                 loc_str = course_location_map.get(course_name, "")
                 title_suffix = f" @ {loc_str}" if loc_str else ""
                 
+                # 這裡會顯示所有分類，包含舊的高二物理(如果有殘留)和新的學測英文
                 with st.expander(f"📘 {course_name}{title_suffix} ({len(s_list)}人)", expanded=True):
                     
                     st.markdown("**👇 點擊出席學生 (到)**")
