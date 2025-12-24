@@ -980,9 +980,9 @@ if cal.get("eventClick"):
     if st.session_state['user']:
         show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 (UI 升級：卡片網格版) ---
+# --- 6. 智慧點名系統 (分組緊湊版) ---
 st.divider()
-st.subheader("📋 每日點名 (卡片滑動版)")
+st.subheader("📋 每日點名 (班級分類 + 緊湊版)")
 
 # 切換日期按鈕
 col_date_btn, col_date_info = st.columns([1, 3], vertical_alignment="center")
@@ -1001,7 +1001,13 @@ with col_date_info:
 date_key = selected_date.isoformat()
 db_record = get_roll_call_from_db(date_key)
 
-# 準備比對當日課程
+# 抓取所有學生資料 (用來查班級)
+all_students = get_students_data_cached()
+
+# 建立 [姓名] -> [班別] 的對照表
+student_course_map = {s['姓名']: s.get('班別', '未分班') for s in all_students}
+
+# 準備比對當日課程 (為了過濾當天該出現的學生)
 daily_courses_display = []
 daily_courses_filter = []
 
@@ -1014,8 +1020,7 @@ for e in all_events:
         if c_loc: daily_courses_display.append(f"{c_title} ({c_loc})")
         else: daily_courses_display.append(c_title)
 
-# 抓取應到學生
-all_students = get_students_data_cached()
+# 抓取應到學生 (Target Students)
 target_students = []
 if daily_courses_display:
     st.caption(f"當日課程：{'、'.join(daily_courses_display)}")
@@ -1049,19 +1054,29 @@ def save_current_state(absent, present, leave):
     time.sleep(0.5)
     st.rerun()
 
-# --- CSS 美化：調整卡片樣式 ---
+# --- CSS 優化 ---
 st.markdown("""
 <style>
-    /* 讓 Toggle 開關更明顯 */
+    /* 調整 Toggle 字體大小與間距，讓小卡片塞得下 */
     div[data-testid="stCheckbox"] label {
+        font-size: 0.85rem !important;
         font-weight: bold;
     }
-    /* 調整 Container 的 padding，讓卡片緊湊一點 */
+    /* 卡片容器樣式 */
     div[data-testid="stVerticalBlockBorderWrapper"] {
-        padding: 1rem;
-        background-color: #f9f9f9; /* 淺灰底色，增加卡片感 */
+        padding: 0.5rem !important; /* 減少內距 */
+        background-color: #f9f9f9;
     }
-    /* 暗黑模式適配 */
+    /* 學生姓名標題 */
+    .student-card-name {
+        font-size: 1rem;
+        font-weight: 600;
+        margin-bottom: 5px;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
     @media (prefers-color-scheme: dark) {
         div[data-testid="stVerticalBlockBorderWrapper"] {
             background-color: #262730;
@@ -1074,45 +1089,59 @@ if st.session_state['user']:
     if not target_students and not current_data['absent'] and not current_data['present'] and not current_data['leave']:
         st.info("今日無課程或無學生名單，無須點名")
     else:
-        # === A. 主要操作區：未到名單 (卡片網格) ===
+        # === A. 主要操作區：未到名單 (分組顯示) ===
         st.markdown("### 🔴 尚未報到")
         
         pending_list = current_data['absent']
         if pending_list:
-            # 暫存使用者的勾選狀態
             selection_state = {"present": [], "leave": []}
             
-            # 建立網格 (Grid Layout)
-            # 手機上通常一行 2 個比較剛好，電腦上可以多一點，這裡設為 2 欄自適應
-            cols = st.columns(2) 
+            # 1. 將學生依照班級分組
+            pending_by_course = {}
+            for name in pending_list:
+                course = student_course_map.get(name, '其他/未知班級')
+                if course not in pending_by_course: pending_by_course[course] = []
+                pending_by_course[course].append(name)
             
-            for i, name in enumerate(pending_list):
-                # 使用 container(border=True) 建立卡片效果
-                with cols[i % 2].container(border=True):
-                    # 學生姓名 (大字體)
-                    st.markdown(f"#### 🎓 {name}")
-                    
-                    # 使用 Toggle (開關) 代替 Checkbox，更有質感
-                    # 注意：這裡使用 columns 再分兩欄，讓兩個開關並排
-                    c_toggle1, c_toggle2 = st.columns(2)
-                    
-                    is_present = c_toggle1.toggle("報到", key=f"tg_p_{name}_{date_key}")
-                    is_leave = c_toggle2.toggle("請假", key=f"tg_l_{name}_{date_key}")
-                    
-                    if is_present: selection_state["present"].append(name)
-                    if is_leave: selection_state["leave"].append(name)
+            # 2. 依照班級名稱排序並顯示
+            sorted_courses = sorted(pending_by_course.keys())
+            
+            for course_name in sorted_courses:
+                # 顯示班級標題
+                st.markdown(f"**📘 {course_name}**")
+                
+                s_list = pending_by_course[course_name]
+                
+                # ★ 這裡控制一列幾個：目前設為 3 (手機上看起來比較剛好，若要更擠可改 4)
+                cols = st.columns(3)
+                
+                for i, name in enumerate(s_list):
+                    with cols[i % 3].container(border=True):
+                        # 自訂 HTML 顯示名字，比較省空間
+                        st.markdown(f"<div class='student-card-name'>{name}</div>", unsafe_allow_html=True)
+                        
+                        # Toggle 開關
+                        c_t1, c_t2 = st.columns(2)
+                        # key 加上 date 避免切換日期時狀態殘留
+                        is_p = c_t1.toggle("到", key=f"p_{name}_{date_key}")
+                        is_l = c_t2.toggle("請", key=f"l_{name}_{date_key}")
+                        
+                        if is_p: selection_state["present"].append(name)
+                        if is_l: selection_state["leave"].append(name)
+                
+                # 每個班級間加一點留白
+                st.write("") 
 
             st.divider()
             
-            # 確認按鈕 (Sticky Bottom 感覺)
+            # 確認按鈕 (Sticky Bottom 風格)
             if st.button("🚀 確認送出 (更新狀態)", type="primary", use_container_width=True):
                 to_present = selection_state["present"]
                 to_leave = selection_state["leave"]
                 
-                # 衝突檢查
                 conflict = set(to_present) & set(to_leave)
                 if conflict:
-                    st.error(f"錯誤：{', '.join(conflict)} 不能同時開啟「報到」與「請假」")
+                    st.error(f"錯誤：{', '.join(conflict)} 不能同時勾選")
                 elif not to_present and not to_leave:
                     st.warning("未選擇任何學生")
                 else:
@@ -1125,12 +1154,12 @@ if st.session_state['user']:
 
         st.divider()
 
-        # === B. 檢視與反悔區 (使用 Pills/Tags 風格呈現) ===
+        # === B. 檢視與反悔區 ===
         with st.expander(f"🟢 已到 ({len(current_data['present'])})  |  🟡 請假 ({len(current_data['leave'])})", expanded=False):
             
             st.write("**🟢 已到名單 (點擊取消)**")
             if current_data['present']:
-                # 使用 columns 來排列按鈕，模擬 Tag 點擊刪除的效果
+                # 已到名單也稍微密集一點 (4欄)
                 p_cols = st.columns(4)
                 for i, p in enumerate(current_data['present']):
                     if p_cols[i % 4].button(f"↩️ {p}", key=f"undo_p_{p}"):
