@@ -980,9 +980,9 @@ if cal.get("eventClick"):
     if st.session_state['user']:
         show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
 
-# --- 6. 智慧點名系統 (分組緊湊版) ---
+# --- 6. 智慧點名系統 (手機極致緊湊版) ---
 st.divider()
-st.subheader("📋 每日點名 (班級分類 + 緊湊版)")
+st.subheader("📋 每日點名")
 
 # 切換日期按鈕
 col_date_btn, col_date_info = st.columns([1, 3], vertical_alignment="center")
@@ -1001,13 +1001,11 @@ with col_date_info:
 date_key = selected_date.isoformat()
 db_record = get_roll_call_from_db(date_key)
 
-# 抓取所有學生資料 (用來查班級)
+# 抓取所有學生資料
 all_students = get_students_data_cached()
-
-# 建立 [姓名] -> [班別] 的對照表
 student_course_map = {s['姓名']: s.get('班別', '未分班') for s in all_students}
 
-# 準備比對當日課程 (為了過濾當天該出現的學生)
+# 準備比對當日課程
 daily_courses_display = []
 daily_courses_filter = []
 
@@ -1020,7 +1018,7 @@ for e in all_events:
         if c_loc: daily_courses_display.append(f"{c_title} ({c_loc})")
         else: daily_courses_display.append(c_title)
 
-# 抓取應到學生 (Target Students)
+# 抓取應到學生
 target_students = []
 if daily_courses_display:
     st.caption(f"當日課程：{'、'.join(daily_courses_display)}")
@@ -1054,32 +1052,63 @@ def save_current_state(absent, present, leave):
     time.sleep(0.5)
     st.rerun()
 
-# --- CSS 優化 ---
+# --- CSS 魔改：極致緊湊 + 手機雙欄 ---
 st.markdown("""
 <style>
-    /* 調整 Toggle 字體大小與間距，讓小卡片塞得下 */
-    div[data-testid="stCheckbox"] label {
-        font-size: 0.85rem !important;
-        font-weight: bold;
-    }
-    /* 卡片容器樣式 */
+    /* 1. 卡片容器極簡化 */
     div[data-testid="stVerticalBlockBorderWrapper"] {
-        padding: 0.5rem !important; /* 減少內距 */
+        padding: 8px 4px !important; /* 上下8px, 左右4px */
         background-color: #f9f9f9;
+        margin-bottom: 0px !important;
     }
-    /* 學生姓名標題 */
-    .student-card-name {
-        font-size: 1rem;
-        font-weight: 600;
-        margin-bottom: 5px;
+    
+    /* 2. 學生名字樣式 */
+    .student-compact-name {
+        font-size: 16px;
+        font-weight: 700;
         text-align: center;
+        margin-bottom: 4px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        color: #333;
     }
+
+    /* 3. 調整 Toggle 開關大小與文字 */
+    div[data-testid="stCheckbox"] {
+        margin-bottom: 0px !important; /* 移除開關下方的留白 */
+    }
+    div[data-testid="stCheckbox"] label {
+        font-size: 14px !important;
+        padding-left: 2px !important;
+    }
+    /* 縮小 Toggle 佔用的高度 */
+    div[data-testid="stMarkdownContainer"] p {
+        margin-bottom: 0px !important;
+    }
+
+    /* 4. 暗黑模式適配 */
     @media (prefers-color-scheme: dark) {
         div[data-testid="stVerticalBlockBorderWrapper"] {
             background-color: #262730;
+        }
+        .student-compact-name {
+            color: #eee;
+        }
+    }
+
+    /* ★★★ 5. 手機版強制雙欄 (關鍵 CSS) ★★★ */
+    @media (max-width: 640px) {
+        /* 針對學生列表的欄位強制設定寬度 */
+        div[data-testid="column"] {
+            width: 50% !important;
+            flex: 0 0 50% !important;
+            min-width: 50% !important;
+            padding: 0 4px !important; /* 欄位間距縮小 */
+        }
+        /* 修正因為強制 50% 導致上方日期按鈕跑版的問題 (非必要但保險) */
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap;
         }
     }
 </style>
@@ -1089,53 +1118,52 @@ if st.session_state['user']:
     if not target_students and not current_data['absent'] and not current_data['present'] and not current_data['leave']:
         st.info("今日無課程或無學生名單，無須點名")
     else:
-        # === A. 主要操作區：未到名單 (分組顯示) ===
+        # === A. 主要操作區 ===
         st.markdown("### 🔴 尚未報到")
         
         pending_list = current_data['absent']
         if pending_list:
             selection_state = {"present": [], "leave": []}
             
-            # 1. 將學生依照班級分組
+            # 分組邏輯
             pending_by_course = {}
             for name in pending_list:
-                course = student_course_map.get(name, '其他/未知班級')
+                course = student_course_map.get(name, '其他')
                 if course not in pending_by_course: pending_by_course[course] = []
                 pending_by_course[course].append(name)
             
-            # 2. 依照班級名稱排序並顯示
             sorted_courses = sorted(pending_by_course.keys())
             
             for course_name in sorted_courses:
-                # 顯示班級標題
-                st.markdown(f"**📘 {course_name}**")
+                st.caption(f"📘 {course_name}") # 班級標題改用 caption 比較不佔空間
                 
                 s_list = pending_by_course[course_name]
                 
-                # ★ 這裡控制一列幾個：目前設為 3 (手機上看起來比較剛好，若要更擠可改 4)
-                cols = st.columns(3)
+                # ★ 設定 columns(4)：電腦上看一排4個，手機上會被 CSS 強制改成一排2個
+                cols = st.columns(4)
                 
                 for i, name in enumerate(s_list):
-                    with cols[i % 3].container(border=True):
-                        # 自訂 HTML 顯示名字，比較省空間
-                        st.markdown(f"<div class='student-card-name'>{name}</div>", unsafe_allow_html=True)
+                    # 使用 container(border=True) 產生卡片
+                    with cols[i % 4].container(border=True):
+                        # 名字置中
+                        st.markdown(f"<div class='student-compact-name'>{name}</div>", unsafe_allow_html=True)
                         
-                        # Toggle 開關
-                        c_t1, c_t2 = st.columns(2)
-                        # key 加上 date 避免切換日期時狀態殘留
-                        is_p = c_t1.toggle("到", key=f"p_{name}_{date_key}")
-                        is_l = c_t2.toggle("請", key=f"l_{name}_{date_key}")
+                        # Toggle 區域：使用 columns([1,1]) 讓兩個開關並排且緊湊
+                        t_col1, t_col2 = st.columns([1, 1])
+                        
+                        with t_col1:
+                            is_p = st.toggle("到", key=f"p_{name}_{date_key}")
+                        with t_col2:
+                            is_l = st.toggle("假", key=f"l_{name}_{date_key}")
                         
                         if is_p: selection_state["present"].append(name)
                         if is_l: selection_state["leave"].append(name)
                 
-                # 每個班級間加一點留白
-                st.write("") 
+                st.write("") # 班級間距
 
             st.divider()
             
-            # 確認按鈕 (Sticky Bottom 風格)
-            if st.button("🚀 確認送出 (更新狀態)", type="primary", use_container_width=True):
+            if st.button("🚀 確認送出", type="primary", use_container_width=True):
                 to_present = selection_state["present"]
                 to_leave = selection_state["leave"]
                 
@@ -1143,45 +1171,39 @@ if st.session_state['user']:
                 if conflict:
                     st.error(f"錯誤：{', '.join(conflict)} 不能同時勾選")
                 elif not to_present and not to_leave:
-                    st.warning("未選擇任何學生")
+                    st.warning("未選擇")
                 else:
                     new_absent = [p for p in pending_list if p not in to_present and p not in to_leave]
                     new_present = current_data['present'] + to_present
                     new_leave = current_data['leave'] + to_leave
                     save_current_state(new_absent, new_present, new_leave)
         else:
-            st.success("🎉 全員已完成點名處理！")
+            st.success("🎉 全員已完成！")
 
         st.divider()
 
-        # === B. 檢視與反悔區 ===
-        with st.expander(f"🟢 已到 ({len(current_data['present'])})  |  🟡 請假 ({len(current_data['leave'])})", expanded=False):
+        # === B. 反悔區 (更緊湊) ===
+        with st.expander(f"已到 ({len(current_data['present'])}) / 請假 ({len(current_data['leave'])})", expanded=False):
             
-            st.write("**🟢 已到名單 (點擊取消)**")
             if current_data['present']:
-                # 已到名單也稍微密集一點 (4欄)
-                p_cols = st.columns(4)
+                st.write("**已到 (點擊還原)**")
+                # 已到名單，電腦一排6個，手機一排3-4個(受CSS影響會變2個，但也OK)
+                p_cols = st.columns(6)
                 for i, p in enumerate(current_data['present']):
-                    if p_cols[i % 4].button(f"↩️ {p}", key=f"undo_p_{p}"):
+                    if p_cols[i % 6].button(f"{p}", key=f"undo_p_{p}"): # 按鈕文字只留名字
                         current_data['present'].remove(p)
                         current_data['absent'].append(p)
                         save_current_state(current_data['absent'], current_data['present'], current_data['leave'])
-            else:
-                st.caption("無")
-
-            st.divider()
-
-            st.write("**🟡 請假名單 (點擊取消)**")
+            
             if current_data['leave']:
-                l_cols = st.columns(4)
+                st.divider()
+                st.write("**請假 (點擊還原)**")
+                l_cols = st.columns(6)
                 for i, l in enumerate(current_data['leave']):
-                    if l_cols[i % 4].button(f"↩️ {l}", key=f"undo_l_{l}"):
+                    if l_cols[i % 6].button(f"{l}", key=f"undo_l_{l}"):
                         current_data['leave'].remove(l)
                         current_data['absent'].append(l)
                         save_current_state(current_data['absent'], current_data['present'], current_data['leave'])
-            else:
-                st.caption("無")
 
 else:
-    st.warning("請登入以進行點名")
-
+    st.warning("請登入")
