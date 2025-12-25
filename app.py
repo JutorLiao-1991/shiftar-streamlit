@@ -1448,7 +1448,8 @@ if st.session_state['user']:
         with st.expander(f"已到 ({len(current_data['present'])}) / 請假 ({len(current_data['leave'])})", expanded=False):
             if current_data['present']:
                 st.write("**🟢 已到 (點選以取消)**")
-                undo_p = st.pills("undo_present", options=current_data['present'], selection_mode="multi", key=f"undo_p_{date_key}")
+                # ★ 修改點：加入 label_visibility="collapsed"
+                undo_p = st.pills("undo_present", options=current_data['present'], selection_mode="multi", key=f"undo_p_{date_key}", label_visibility="collapsed")
                 if undo_p:
                     if st.button("↩️ 還原選取的學生 (移回未到)", key="btn_undo_p"):
                         new_present = [p for p in current_data['present'] if p not in undo_p]
@@ -1458,7 +1459,8 @@ if st.session_state['user']:
             if current_data['leave']:
                 st.divider()
                 st.write("**🟡 請假 (點選以取消)**")
-                undo_l = st.pills("undo_leave", options=current_data['leave'], selection_mode="multi", key=f"undo_l_{date_key}")
+                # ★ 修改點：加入 label_visibility="collapsed"
+                undo_l = st.pills("undo_leave", options=current_data['leave'], selection_mode="multi", key=f"undo_l_{date_key}", label_visibility="collapsed")
                 if undo_l:
                     if st.button("↩️ 還原選取的學生 (移回未到)", key="btn_undo_l"):
                         new_leave = [p for p in current_data['leave'] if p not in undo_l]
