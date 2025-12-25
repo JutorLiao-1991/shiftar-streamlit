@@ -364,7 +364,7 @@ def show_general_management_dialog():
                     c_course = c3.selectbox("課程欄", cols, index=get_idx(['課程', '班別']))
                     c_cont = c4.selectbox("電話欄", cols, index=get_idx(['電話', '聯絡', 'Tel']))
                     
-                    if st.button("✅ 匯入"):
+                    if st.button("✅ 匯入", key="btn_import_stu"):
                         new_data = []
                         for _, row in df.iterrows():
                             # 簡化處理：只取基本欄位
@@ -393,7 +393,7 @@ def show_general_management_dialog():
             c3, c4 = st.columns(2)
             n_grade = c3.selectbox("年級", GRADE_OPTIONS)
             n_course = c4.selectbox("班別", get_unique_course_names())
-            if st.button("新增"):
+            if st.button("新增", key="btn_add_manual_stu"):
                 current_students.append({"姓名": n_name, "學生手機": n_phone, "年級": n_grade, "班別": n_course, "家裡":"", "爸爸":"", "媽媽":""})
                 save_students_data(current_students); st.rerun()
 
@@ -407,7 +407,7 @@ def show_general_management_dialog():
             with st.expander("🗑️ 刪除"):
                 d_opts = [f"{r['姓名']} ({r.get('班別')})" for _, r in df_s.iterrows()]
                 to_del = st.multiselect("選擇刪除", d_opts)
-                if to_del and st.button("確認刪除"):
+                if to_del and st.button("確認刪除", key="btn_del_manual_stu"):
                     new_l = [s for s in current_students if f"{s['姓名']} ({s.get('班別')})" not in to_del]
                     save_students_data(new_l); st.rerun()
 
@@ -416,9 +416,9 @@ def show_general_management_dialog():
         pts = get_part_timers_list_cached()
         c1, c2 = st.columns([2, 1])
         n_pt = c1.text_input("新工讀生")
-        if c2.button("新增"): pts.append(n_pt); save_part_timers_list(pts); st.rerun()
+        if c2.button("新增", key="btn_add_pt"): pts.append(n_pt); save_part_timers_list(pts); st.rerun()
         d_pt = st.multiselect("刪除", pts)
-        if d_pt and st.button("確認刪"): save_part_timers_list([x for x in pts if x not in d_pt]); st.rerun()
+        if d_pt and st.button("確認刪", key="btn_del_pt"): save_part_timers_list([x for x in pts if x not in d_pt]); st.rerun()
 
     # --- Tab 3: 試聽與潛在名單 (NEW) ---
     with tab3:
