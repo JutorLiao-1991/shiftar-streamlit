@@ -129,21 +129,24 @@ def get_potential_students():
     return [{**doc.to_dict(), "id": doc.id} for doc in docs]
 
 def move_trial_to_official(trial_data, doc_id):
-    # 1. 加入正式名單
+    # 1. 加入正式名單 (包含所有詳細聯絡資訊)
     current_students = get_students_data_cached()
     new_student = {
         "姓名": trial_data.get("name"),
         "年級": trial_data.get("grade"),
         "班別": trial_data.get("course"),
-        "學生手機": trial_data.get("phone", ""),
-        "家裡": "", "爸爸": "", "媽媽": "", "其他家人": "" # 試聽時可能資料不全，先留白
+        "學生手機": trial_data.get("stu_mob", ""),
+        "家裡": trial_data.get("home_tel", ""),
+        "爸爸": trial_data.get("dad_tel", ""),
+        "媽媽": trial_data.get("mom_tel", ""),
+        "其他家人": trial_data.get("other_tel", "")
     }
     current_students.append(new_student)
     save_students_data(current_students)
     
     # 2. 刪除試聽紀錄
     delete_trial_student(doc_id)
-    st.success(f"🎉 歡迎 {trial_data.get('name')} 加入 {trial_data.get('course')}！")
+    st.success(f"🎉 歡迎 {trial_data.get('name')} 加入 {trial_data.get('course')}！資料已自動轉入。")
     time.sleep(1.5)
     st.rerun()
 
@@ -367,10 +370,9 @@ def show_general_management_dialog():
                     if st.button("✅ 匯入", key="btn_import_stu"):
                         new_data = []
                         for _, row in df.iterrows():
-                            # 簡化處理：只取基本欄位
+                            # 簡化處理
                             name = str(row[c_name]).strip(); grade = str(row[c_grade]).strip()
                             raw_cont = str(row[c_cont]).strip() if pd.notna(row[c_cont]) else ""
-                            # 簡單電話清洗
                             import re
                             phone_clean = re.sub(r'[^\d\-]', '', raw_cont)
                             
@@ -393,6 +395,7 @@ def show_general_management_dialog():
             c3, c4 = st.columns(2)
             n_grade = c3.selectbox("年級", GRADE_OPTIONS)
             n_course = c4.selectbox("班別", get_unique_course_names())
+            # ★ 修正 Key
             if st.button("新增", key="btn_add_manual_stu"):
                 current_students.append({"姓名": n_name, "學生手機": n_phone, "年級": n_grade, "班別": n_course, "家裡":"", "爸爸":"", "媽媽":""})
                 save_students_data(current_students); st.rerun()
@@ -407,6 +410,7 @@ def show_general_management_dialog():
             with st.expander("🗑️ 刪除"):
                 d_opts = [f"{r['姓名']} ({r.get('班別')})" for _, r in df_s.iterrows()]
                 to_del = st.multiselect("選擇刪除", d_opts)
+                # ★ 修正 Key
                 if to_del and st.button("確認刪除", key="btn_del_manual_stu"):
                     new_l = [s for s in current_students if f"{s['姓名']} ({s.get('班別')})" not in to_del]
                     save_students_data(new_l); st.rerun()
@@ -416,26 +420,44 @@ def show_general_management_dialog():
         pts = get_part_timers_list_cached()
         c1, c2 = st.columns([2, 1])
         n_pt = c1.text_input("新工讀生")
+        # ★ 修正 Key
         if c2.button("新增", key="btn_add_pt"): pts.append(n_pt); save_part_timers_list(pts); st.rerun()
         d_pt = st.multiselect("刪除", pts)
+        # ★ 修正 Key
         if d_pt and st.button("確認刪", key="btn_del_pt"): save_part_timers_list([x for x in pts if x not in d_pt]); st.rerun()
 
     # --- Tab 3: 試聽與潛在名單 (NEW) ---
     with tab3:
         st.subheader("🎧 試聽生管理 (未入班)")
         with st.form("new_trial"):
+            st.write("📝 **基本資料**")
             c1, c2 = st.columns(2)
             t_name = c1.text_input("試聽生姓名")
-            t_phone = c2.text_input("聯絡電話")
-            c3, c4, c5 = st.columns(3)
-            t_grade = c3.selectbox("年級", GRADE_OPTIONS, key="t_g")
-            t_course = c4.selectbox("試聽課程", get_unique_course_names(), key="t_c")
-            t_date = c5.date_input("試聽日期", datetime.date.today())
+            t_grade = c2.selectbox("年級", GRADE_OPTIONS, key="t_g")
+            
+            c3, c4 = st.columns(2)
+            t_course = c3.selectbox("試聽課程", get_unique_course_names(), key="t_c")
+            t_date = c4.date_input("試聽日期", datetime.date.today())
+
+            st.write("📞 **聯絡方式 (轉正後會自動帶入)**")
+            c5, c6 = st.columns(2)
+            t_mobile = c5.text_input("學生手機")
+            t_home = c6.text_input("家裡電話")
+            
+            c7, c8 = st.columns(2)
+            t_dad = c7.text_input("爸爸電話")
+            t_mom = c8.text_input("媽媽電話")
+            
+            t_other = st.text_input("其他聯絡人")
+
             if st.form_submit_button("新增試聽紀錄"):
                 if t_name and t_course:
                     save_trial_student({
-                        "name": t_name, "phone": t_phone, "grade": t_grade, 
-                        "course": t_course, "trial_date": t_date.isoformat(), "created_at": datetime.datetime.now().isoformat()
+                        "name": t_name, "grade": t_grade, 
+                        "course": t_course, "trial_date": t_date.isoformat(), 
+                        "stu_mob": t_mobile, "home_tel": t_home,
+                        "dad_tel": t_dad, "mom_tel": t_mom, "other_tel": t_other,
+                        "created_at": datetime.datetime.now().isoformat()
                     })
                     st.rerun()
                 else: st.error("姓名與課程為必填")
