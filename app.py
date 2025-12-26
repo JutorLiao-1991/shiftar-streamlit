@@ -402,9 +402,16 @@ def show_general_management_dialog():
         if current_students:
             st.divider(); st.subheader("🔎 列表")
             df_s = pd.DataFrame(current_students)
+            
+            # 強制欄位順序
+            target_cols = ["姓名", "年級", "班別", "學生手機", "爸爸", "媽媽", "家裡", "其他家人"]
+            for c in target_cols:
+                if c not in df_s.columns: df_s[c] = ""
+            df_s = df_s[target_cols]
+
             f_class = st.selectbox("班別篩選", ["全部"] + sorted(list(set([x.get('班別') for x in current_students if x.get('班別')]))))
             if f_class != "全部": df_s = df_s[df_s['班別'] == f_class]
-            st.dataframe(df_s, use_container_width=True)
+            st.dataframe(df_s, use_container_width=True, hide_index=True)
             
             with st.expander("🗑️ 刪除"):
                 d_opts = [f"{r['姓名']} ({r.get('班別')})" for _, r in df_s.iterrows()]
@@ -834,38 +841,6 @@ if st.session_state['user']:
     if st.session_state['is_admin']:
         if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
 
-all_events = get_all_events_cached()
-calendar_options = {
-    "editable": True, 
-    "headerToolbar": { "left": "today prev,next", "center": "title", "right": "listMonth,dayGridMonth" },
-    "initialView": "dayGridMonth", 
-    "height": "650px", "locale": "zh-tw",
-    "titleFormat": {"year": "numeric", "month": "long"},
-    "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
-    "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
-    "views": { "dayGridMonth": {"displayEventTime": False}, "listMonth": {"displayEventTime": True} },
-    "selectable": True,
-}
-cal = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
-
-# 點擊日期：只開公告
-if cal.get("dateClick"):
-    clicked = cal["dateClick"]["date"]
-    try:
-        if "T" in clicked:
-            if clicked.endswith("Z"): clicked = clicked.replace("Z", "+00:00")
-            dt_utc = datetime.datetime.fromisoformat(clicked)
-            if dt_utc.tzinfo is None: dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
-            d_obj = dt_utc.astimezone(pytz.timezone('Asia/Taipei')).date()
-        else: d_obj = datetime.datetime.strptime(clicked, "%Y-%m-%d").date()
-        
-        if st.session_state['user']: show_notice_dialog(default_date=d_obj)
-    except: pass
-
-if cal.get("eventClick"):
-    if st.session_state['user']:
-        show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
-
 # --- 6. 智慧點名系統 (課程優先分組版) ---
 st.divider()
 st.subheader("📋 每日點名")
@@ -896,7 +871,10 @@ for s in all_students:
     if c and n:
         course_to_students_map[c].append(n)
 
-# 2. 準備當日課程 & 地點對照表
+# 2. 準備當日課程 & 地點對照表 (這段要放在 all_events 之前，所以要先讀取 events)
+# 但因為點名需要 all_events，所以我們得先執行 get_all_events_cached()
+all_events = get_all_events_cached()
+
 daily_courses_display = []
 daily_courses_filter = []     
 course_location_map = {} 
@@ -1046,7 +1024,6 @@ if st.session_state['user']:
         with st.expander(f"已到 ({len(current_data['present'])}) / 請假 ({len(current_data['leave'])})", expanded=False):
             if current_data['present']:
                 st.write("**🟢 已到 (點選以取消)**")
-                # ★ 已加入 label_visibility="collapsed"
                 undo_p = st.pills("undo_present", options=current_data['present'], selection_mode="multi", key=f"undo_p_{date_key}", label_visibility="collapsed")
                 if undo_p:
                     if st.button("↩️ 還原選取的學生 (移回未到)", key="btn_undo_p"):
@@ -1057,7 +1034,6 @@ if st.session_state['user']:
             if current_data['leave']:
                 st.divider()
                 st.write("**🟡 請假 (點選以取消)**")
-                # ★ 已加入 label_visibility="collapsed"
                 undo_l = st.pills("undo_leave", options=current_data['leave'], selection_mode="multi", key=f"undo_l_{date_key}", label_visibility="collapsed")
                 if undo_l:
                     if st.button("↩️ 還原選取的學生 (移回未到)", key="btn_undo_l"):
@@ -1067,3 +1043,47 @@ if st.session_state['user']:
 
 else:
     st.warning("請登入以進行點名")
+
+# --- 7. 行事曆 (Calendar) 移至底部 ---
+st.divider()
+st.subheader("📅 行事曆")
+
+# 這裡使用我們之前準備好的 all_events
+calendar_options = {
+    "editable": True, 
+    "headerToolbar": {
+        "left": "prev,next",
+        "center": "title",
+        "right": "today dayGridMonth,listMonth,timeGridDay" # ★ 右上角加入 today 按鈕與 views
+    },
+    "initialView": "dayGridMonth", 
+    "height": "650px", "locale": "zh-tw",
+    "titleFormat": {"year": "numeric", "month": "long"},
+    "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
+    "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
+    "views": {
+        "dayGridMonth": {"displayEventTime": False},
+        "listMonth": {"displayEventTime": True},
+        "timeGridDay": {"displayEventTime": True} # 日行程視圖設定
+    },
+    "selectable": True,
+}
+cal = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
+
+# 點擊日期：只開公告
+if cal.get("dateClick"):
+    clicked = cal["dateClick"]["date"]
+    try:
+        if "T" in clicked:
+            if clicked.endswith("Z"): clicked = clicked.replace("Z", "+00:00")
+            dt_utc = datetime.datetime.fromisoformat(clicked)
+            if dt_utc.tzinfo is None: dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
+            d_obj = dt_utc.astimezone(pytz.timezone('Asia/Taipei')).date()
+        else: d_obj = datetime.datetime.strptime(clicked, "%Y-%m-%d").date()
+        
+        if st.session_state['user']: show_notice_dialog(default_date=d_obj)
+    except: pass
+
+if cal.get("eventClick"):
+    if st.session_state['user']:
+        show_edit_event_dialog(cal["eventClick"]["event"]["id"], cal["eventClick"]["event"]["extendedProps"])
