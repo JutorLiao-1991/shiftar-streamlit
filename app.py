@@ -1058,6 +1058,8 @@ calendar_options = {
     },
     "initialView": "dayGridMonth", 
     "height": "650px", "locale": "zh-tw",
+    "slotMinTime": "08:00:00",  # Added: 設定最早顯示時間
+    "slotMaxTime": "22:00:00",  # Added: 設定最晚顯示時間
     "titleFormat": {"year": "numeric", "month": "long"},
     "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
     "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
