@@ -129,7 +129,7 @@ def get_potential_students():
     return [{**doc.to_dict(), "id": doc.id} for doc in docs]
 
 def move_trial_to_official(trial_data, doc_id):
-    # 1. 加入正式名單 (包含所有詳細聯絡資訊)
+    # 1. 加入正式名單
     current_students = get_students_data_cached()
     new_student = {
         "姓名": trial_data.get("name"),
@@ -464,25 +464,19 @@ def show_general_management_dialog():
             st.divider()
             st.caption("尚未決定去留的試聽生 (可手動操作)：")
             
-            # 使用 Container 讓排版更整齊
             for t in trials:
                 with st.container(border=True):
                     c_info, c_action = st.columns([3, 2])
-                    
                     with c_info:
                         st.markdown(f"**🎓 {t['name']}** ({t['grade']})")
                         st.caption(f"課程：{t['course']} | 日期：{t['trial_date']}")
-                    
                     with c_action:
-                        # 放置三個操作按鈕
                         b1, b2, b3 = st.columns(3)
-                        if b1.button("✅", key=f"man_join_{t['id']}", help="確定入班 (加入學生名單)"):
+                        if b1.button("✅", key=f"man_join_{t['id']}", help="確定入班"):
                             move_trial_to_official(t, t['id'])
-                        
-                        if b2.button("📂", key=f"man_arch_{t['id']}", help="歸檔 (移至潛在名單)"):
+                        if b2.button("📂", key=f"man_arch_{t['id']}", help="歸檔"):
                             move_trial_to_potential(t, t['id'])
-                            
-                        if b3.button("🗑️", key=f"man_del_{t['id']}", help="刪除紀錄"):
+                        if b3.button("🗑️", key=f"man_del_{t['id']}", help="刪除"):
                             delete_trial_student(t['id']); st.rerun()
         else:
             st.info("目前沒有試聽生")
@@ -811,6 +805,30 @@ for i, area in enumerate(areas):
 
 st.divider()
 
+# ★ 試聽追蹤自動提醒 (放在最顯眼的位置) ★
+pending_trials = get_trial_students()
+follow_up_list = []
+for t in pending_trials:
+    try:
+        t_date = datetime.date.fromisoformat(t['trial_date'])
+        if datetime.date.today() >= (t_date + datetime.timedelta(days=7)):
+            follow_up_list.append(t)
+    except: pass
+
+if follow_up_list:
+    st.markdown("### 🔔 試聽追蹤提醒")
+    st.info("以下學生已試聽滿一週，請確認是否入班？")
+    for t in follow_up_list:
+        with st.container(border=True):
+            st.markdown(f"**🎓 {t['name']}** ({t['grade']})")
+            st.caption(f"試聽：{t['course']} ({t['trial_date']})")
+            c1, c2 = st.columns(2)
+            if c1.button("✅ 入班", key=f"alert_join_{t['id']}"):
+                move_trial_to_official(t, t['id'])
+            if c2.button("📂 歸檔", key=f"alert_arch_{t['id']}"):
+                move_trial_to_potential(t, t['id'])
+    st.divider()
+
 if st.session_state['user']:
     if st.button("📂 資料管理", type="secondary", use_container_width=True): show_general_management_dialog()
     if st.session_state['is_admin']:
@@ -889,7 +907,6 @@ for e in all_events:
         c_title = props.get('title', '')
         c_loc = props.get('location', '')
         
-        # ★ 這裡也同步更新了線上->櫃檯 (以防萬一)
         if c_loc == "線上": c_loc = "櫃檯"
         
         daily_courses_filter.append(c_title)
