@@ -112,6 +112,25 @@ def save_part_timers_list(new_list):
     get_part_timers_list_cached.clear()
     st.toast("工讀生名單已更新")
 
+# --- 假期管理 (NEW) ---
+def get_teacher_vacations():
+    docs = db.collection("teacher_vacations").stream()
+    return [{**doc.to_dict(), "id": doc.id} for doc in docs]
+
+def save_teacher_vacation(teacher, start, end, reason):
+    db.collection("teacher_vacations").add({
+        "teacher": teacher, "start": start.isoformat(), "end": end.isoformat(), "reason": reason, "created_at": datetime.datetime.now().isoformat()
+    })
+    get_teacher_vacations_cached.clear() # 清除快取
+
+def delete_teacher_vacation(doc_id):
+    db.collection("teacher_vacations").document(doc_id).delete()
+    get_teacher_vacations_cached.clear()
+
+@st.cache_data(ttl=300)
+def get_teacher_vacations_cached():
+    return get_teacher_vacations()
+
 # --- 新增：試聽生與潛在名單管理 ---
 def get_trial_students():
     docs = db.collection("trial_students").stream()
@@ -187,6 +206,9 @@ def get_all_events_cached():
             if data.get("type") == "shift":
                 title = f"{data.get('title')} ({data.get('teacher')})"
                 color = "#28a745"
+                # 檢查是否為需要調課的標記
+                if "⚠️ 調課" in title:
+                    color = "#FF0000" # 紅色警示
             elif data.get("type") == "part_time":
                 title = f"{data.get('staff')}"
                 color = "#6f42c1"
@@ -231,6 +253,21 @@ def batch_delete_events(doc_ids):
     batch.commit()
     get_all_events_cached.clear()
     st.toast(f"刪除 {len(doc_ids)} 筆")
+
+def batch_mark_reschedule(doc_ids):
+    # 批次將課程標記為需調課
+    batch = db.batch()
+    for doc_id in doc_ids:
+        ref = db.collection("shifts").document(doc_id)
+        # 讀取現有 title，加上前綴 (避免重複加)
+        curr = ref.get().to_dict()
+        title = curr.get('title', '')
+        if "⚠️ 調課" not in title:
+            new_title = f"⚠️ 調課-{title}"
+            batch.update(ref, {"title": new_title})
+    batch.commit()
+    get_all_events_cached.clear()
+    st.toast(f"已將 {len(doc_ids)} 堂課標記為需調課", icon="⚠️")
 
 def get_cleaning_status(area):
     doc = db.collection("latest_cleaning_status").document(area).get()
@@ -498,13 +535,17 @@ def show_general_management_dialog():
 
 @st.dialog("⚙️ 管理員後台")
 def show_admin_dialog():
-    tab1, tab2, tab3, tab4 = st.tabs(["📅 智慧排課", "👷 工讀排班", "💰 薪資", "🗑️ 資料管理"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📅 智慧排課", "👷 工讀排班", "💰 薪資", "🗑️ 資料管理", "🌴 假期管理"])
     
+    # --- Tab 1: 智慧排課 (新增頻率選擇) ---
     with tab1:
         st.subheader("老師課程安排")
         c1, c2 = st.columns(2)
         start_date = c1.date_input("首堂課日期")
-        weeks_count = c2.number_input("排課週數", min_value=1, value=12)
+        
+        # ★ 新增：排課頻率（適合寒暑假連續排課）
+        freq_type = c2.radio("排課頻率", ["每週固定 (Regular)", "連續每日 (寒暑假)"], horizontal=True)
+        weeks_count = st.number_input("持續次數 (週數/天數)", min_value=1, value=12)
         
         teachers_cfg = get_teachers_data()
         teacher_names = list(teachers_cfg.keys()) + ADMINS
@@ -518,32 +559,66 @@ def show_admin_dialog():
         s_location = st.selectbox("教室", ["大教室", "小教室", "流放教室", "櫃檯"])
         
         if "preview_schedule" not in st.session_state: st.session_state['preview_schedule'] = None
+        
         if st.button("🔍 檢查時段與假日", key="check_shift"):
             if s_teacher == "請選擇": st.error("請選擇師資")
             else:
                 save_course_name(s_course_name)
                 preview = []
                 year = start_date.year
+                
+                # 準備國定假日
                 holidays = {}
                 try:
                     resp = requests.get(f"https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json").json()
                     for d in resp:
                         if d['isHoliday']: holidays[d['date']] = d['description']
                 except: pass
+                
+                # 準備老師假期
+                teacher_vacs = get_teacher_vacations_cached()
+                
                 t_start = datetime.datetime.strptime(t_start_str, "%H:%M").time()
                 t_end = datetime.datetime.strptime(t_end_str, "%H:%M").time()
+                
                 for i in range(weeks_count):
-                    current_date = start_date + datetime.timedelta(weeks=i)
+                    # ★ 判斷頻率
+                    if freq_type == "連續每日 (寒暑假)":
+                        current_date = start_date + datetime.timedelta(days=i)
+                    else:
+                        current_date = start_date + datetime.timedelta(weeks=i)
+                        
                     d_str = current_date.strftime("%Y%m%d")
+                    
+                    # 檢查衝突：1. 國定假日 2. 老師請假
+                    is_conflict = False
+                    reason = ""
+                    
+                    # 1. 檢查國定假日
+                    if d_str in holidays:
+                        is_conflict = True
+                        reason = holidays[d_str]
+                    
+                    # 2. 檢查老師請假
+                    for v in teacher_vacs:
+                        if v['teacher'] == s_teacher:
+                            v_start = datetime.datetime.fromisoformat(v['start']).date()
+                            v_end = datetime.datetime.fromisoformat(v['end']).date()
+                            if v_start <= current_date <= v_end:
+                                is_conflict = True
+                                r_text = f"老師休假 ({v['reason']})"
+                                reason = f"{reason} | {r_text}" if reason else r_text
+
                     preview.append({
                         "date": current_date,
                         "start_dt": datetime.datetime.combine(current_date, t_start),
                         "end_dt": datetime.datetime.combine(current_date, t_end),
-                        "conflict": d_str in holidays,
-                        "reason": holidays.get(d_str, ""),
-                        "selected": not (d_str in holidays)
+                        "conflict": is_conflict,
+                        "reason": reason,
+                        "selected": not is_conflict
                     })
                 st.session_state['preview_schedule'] = preview
+                
         if st.session_state['preview_schedule']:
             st.divider()
             final_schedule = []
@@ -736,6 +811,70 @@ def show_admin_dialog():
             if selected_labels and st.button("🗑️ 確認刪除"):
                 batch_delete_events([event_map[l] for l in selected_labels])
                 st.rerun()
+
+    # --- Tab 5: 假期管理 (NEW) ---
+    with tab5:
+        st.subheader("🌴 老師假期設定")
+        st.caption("設定老師的請假區間，系統會在智慧排課時自動偵測衝突。")
+        
+        teachers_cfg = get_teachers_data()
+        teacher_names = list(teachers_cfg.keys()) + ADMINS
+        
+        with st.form("add_vacation"):
+            c1, c2 = st.columns(2)
+            v_teacher = c1.selectbox("選擇老師", ["請選擇"] + list(set(teacher_names)))
+            v_reason = c2.text_input("事由 (例如：出國、進修)")
+            c3, c4 = st.columns(2)
+            v_start = c3.date_input("開始日期")
+            v_end = c4.date_input("結束日期")
+            
+            if st.form_submit_button("💾 儲存假期"):
+                if v_teacher == "請選擇": st.error("請選擇老師")
+                elif v_end < v_start: st.error("結束日期不能早於開始日期")
+                else:
+                    # 1. 檢查是否有衝突課程 (Retroactive Conflict Detection)
+                    start_dt = datetime.datetime.combine(v_start, datetime.time(0, 0))
+                    end_dt = datetime.datetime.combine(v_end, datetime.time(23, 59))
+                    
+                    conflict_docs = db.collection("shifts")\
+                        .where("type", "==", "shift")\
+                        .where("teacher", "==", v_teacher)\
+                        .where("start", ">=", start_dt.isoformat())\
+                        .where("start", "<=", end_dt.isoformat())\
+                        .stream()
+                        
+                    conflict_ids = [d.id for d in conflict_docs]
+                    
+                    # 2. 儲存假期
+                    save_teacher_vacation(v_teacher, start_dt, end_dt, v_reason)
+                    
+                    if conflict_ids:
+                        st.session_state['pending_reschedule'] = conflict_ids
+                        st.warning(f"⚠️ 偵測到該時段已有 {len(conflict_ids)} 堂課！建議標記為「需調課」。")
+                    else:
+                        st.success("假期設定成功！無衝突課程。")
+                        st.rerun()
+
+        # 處理標記調課按鈕 (放在 Form 外面)
+        if 'pending_reschedule' in st.session_state and st.session_state['pending_reschedule']:
+            if st.button("🚩 將衝突課程標記為「⚠️ 需調課」", type="primary"):
+                batch_mark_reschedule(st.session_state['pending_reschedule'])
+                st.session_state['pending_reschedule'] = None # 清除狀態
+                st.rerun()
+
+        st.divider()
+        st.write("📋 **目前假期列表**")
+        vacs = get_teacher_vacations_cached()
+        if vacs:
+            for v in vacs:
+                c1, c2, c3 = st.columns([2, 3, 1])
+                c1.write(f"**{v['teacher']}**")
+                c2.write(f"{v['start'][:10]} ~ {v['end'][:10]} ({v['reason']})")
+                if c3.button("🗑️", key=f"del_vac_{v['id']}"):
+                    delete_teacher_vacation(v['id'])
+                    st.rerun()
+        else:
+            st.info("尚無假期紀錄")
 
 # --- 5. 主介面邏輯 ---
 
