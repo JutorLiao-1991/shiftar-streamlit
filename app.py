@@ -33,6 +33,11 @@ st.markdown("""
         background-color: #fff5f5;
         margin-bottom: 15px;
     }
+    /* 離班學生樣式 */
+    .leaving-student {
+        color: #e63946;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -112,7 +117,7 @@ def save_part_timers_list(new_list):
     get_part_timers_list_cached.clear()
     st.toast("工讀生名單已更新")
 
-# --- 假期管理 (NEW) ---
+# --- 假期管理 ---
 def get_teacher_vacations():
     docs = db.collection("teacher_vacations").stream()
     return [{**doc.to_dict(), "id": doc.id} for doc in docs]
@@ -121,7 +126,7 @@ def save_teacher_vacation(teacher, start, end, reason):
     db.collection("teacher_vacations").add({
         "teacher": teacher, "start": start.isoformat(), "end": end.isoformat(), "reason": reason, "created_at": datetime.datetime.now().isoformat()
     })
-    get_teacher_vacations_cached.clear() # 清除快取
+    get_teacher_vacations_cached.clear() 
 
 def delete_teacher_vacation(doc_id):
     db.collection("teacher_vacations").document(doc_id).delete()
@@ -131,7 +136,7 @@ def delete_teacher_vacation(doc_id):
 def get_teacher_vacations_cached():
     return get_teacher_vacations()
 
-# --- 新增：試聽生與潛在名單管理 ---
+# --- 試聽生與潛在名單管理 ---
 def get_trial_students():
     docs = db.collection("trial_students").stream()
     return [{**doc.to_dict(), "id": doc.id} for doc in docs]
@@ -148,7 +153,6 @@ def get_potential_students():
     return [{**doc.to_dict(), "id": doc.id} for doc in docs]
 
 def move_trial_to_official(trial_data, doc_id):
-    # 1. 加入正式名單
     current_students = get_students_data_cached()
     new_student = {
         "姓名": trial_data.get("name"),
@@ -162,21 +166,16 @@ def move_trial_to_official(trial_data, doc_id):
     }
     current_students.append(new_student)
     save_students_data(current_students)
-    
-    # 2. 刪除試聽紀錄
     delete_trial_student(doc_id)
     st.success(f"🎉 歡迎 {trial_data.get('name')} 加入 {trial_data.get('course')}！資料已自動轉入。")
     time.sleep(1.5)
     st.rerun()
 
 def move_trial_to_potential(trial_data, doc_id):
-    # 1. 加入潛在名單
     archive_data = trial_data.copy()
     archive_data['archived_at'] = datetime.datetime.now().isoformat()
     archive_data['status'] = 'did_not_join'
     db.collection("potential_students").add(archive_data)
-    
-    # 2. 刪除試聽紀錄
     delete_trial_student(doc_id)
     st.info(f"📂 已將 {trial_data.get('name')} 歸檔至潛在名單")
     time.sleep(1.5)
@@ -206,9 +205,7 @@ def get_all_events_cached():
             if data.get("type") == "shift":
                 title = f"{data.get('title')} ({data.get('teacher')})"
                 color = "#28a745"
-                # 檢查是否為需要調課的標記
-                if "⚠️ 調課" in title:
-                    color = "#FF0000" # 紅色警示
+                if "⚠️ 調課" in title: color = "#FF0000"
             elif data.get("type") == "part_time":
                 title = f"{data.get('staff')}"
                 color = "#6f42c1"
@@ -255,11 +252,9 @@ def batch_delete_events(doc_ids):
     st.toast(f"刪除 {len(doc_ids)} 筆")
 
 def batch_mark_reschedule(doc_ids):
-    # 批次將課程標記為需調課
     batch = db.batch()
     for doc_id in doc_ids:
         ref = db.collection("shifts").document(doc_id)
-        # 讀取現有 title，加上前綴 (避免重複加)
         curr = ref.get().to_dict()
         title = curr.get('title', '')
         if "⚠️ 調課" not in title:
@@ -355,7 +350,6 @@ def show_roll_call_review_dialog():
     recs = get_all_roll_calls()
     if not recs: st.info("無紀錄"); return
     
-    # 準備地點對照
     d_loc = {}
     for e in get_all_events_cached():
         sd = e.get('start', '').split('T')[0]
@@ -384,6 +378,50 @@ def show_general_management_dialog():
     # --- Tab 1: 學生名單 ---
     with tab1:
         current_students = get_students_data_cached()
+        
+        # 1. 離班功能 (NEW)
+        with st.expander("👋 辦理離班/退班"):
+            st.warning("設定後，學生將於「最後上課日」隔天起自動從點名表移除，但資料會保留。")
+            
+            # 建立選單：只顯示還沒離班的學生 (或顯示所有但標記狀態)
+            active_opts = []
+            for s in current_students:
+                name = s.get('姓名')
+                c = s.get('班別')
+                leave_date = s.get('leaving_date')
+                label = f"{name} ({c})"
+                if leave_date: label += f" [已設離班: {leave_date}]"
+                active_opts.append(label)
+            
+            sel_student_label = st.selectbox("選擇學生", ["請選擇"] + active_opts)
+            
+            if sel_student_label != "請選擇":
+                c1, c2 = st.columns(2)
+                last_date = c1.date_input("最後上課日 (該日之後將不再點名)")
+                refund = c2.checkbox("需要計算退費 (待結算)", value=False)
+                
+                if refund:
+                    st.info("💡 提示：退費系統開發中，此標記將用於未來的財務報表提醒。")
+                
+                if st.button("確認辦理離班", type="primary"):
+                    # 找到該學生並更新資料
+                    target_name = sel_student_label.split(" (")[0]
+                    target_course = sel_student_label.split("(")[1].split(")")[0] # 簡單解析
+                    
+                    updated_list = []
+                    for s in current_students:
+                        # 比對姓名與班別 (最保險)
+                        if s.get('姓名') == target_name and s.get('班別') == target_course:
+                            s['leaving_date'] = last_date.isoformat()
+                            s['refund_needed'] = refund
+                        updated_list.append(s)
+                    
+                    save_students_data(updated_list)
+                    st.success(f"已設定 {target_name} 於 {last_date} 離班。")
+                    time.sleep(1)
+                    st.rerun()
+
+        # 2. 匯入功能
         with st.expander("📂 Excel 匯入", expanded=False):
             uploaded = st.file_uploader("上傳 Excel/CSV", type=['csv', 'xlsx'])
             if uploaded:
@@ -407,24 +445,21 @@ def show_general_management_dialog():
                     if st.button("✅ 匯入", key="btn_import_stu"):
                         new_data = []
                         for _, row in df.iterrows():
-                            # 簡化處理
                             name = str(row[c_name]).strip(); grade = str(row[c_grade]).strip()
                             raw_cont = str(row[c_cont]).strip() if pd.notna(row[c_cont]) else ""
                             import re
                             phone_clean = re.sub(r'[^\d\-]', '', raw_cont)
-                            
                             raw_courses = str(row[c_course]).strip() if pd.notna(row[c_course]) else ""
                             courses = [c.strip() for c in raw_courses.replace("\n", ",").split(",") if c.strip()]
-                            
                             base = {"姓名": name, "年級": grade, "學生手機": phone_clean, "家裡": "", "爸爸": "", "媽媽": ""}
                             if not courses: new_data.append({**base, "班別": "未分班"})
                             else: 
                                 for c in courses: new_data.append({**base, "班別": c})
-                        
                         save_students_data(current_students + new_data)
                         st.success(f"匯入 {len(new_data)} 筆"); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"Error: {e}")
 
+        # 3. 手動新增
         with st.expander("手動新增"):
             c1, c2 = st.columns(2)
             n_name = c1.text_input("姓名")
@@ -436,21 +471,33 @@ def show_general_management_dialog():
                 current_students.append({"姓名": n_name, "學生手機": n_phone, "年級": n_grade, "班別": n_course, "家裡":"", "爸爸":"", "媽媽":""})
                 save_students_data(current_students); st.rerun()
 
+        # 4. 列表與刪除
         if current_students:
             st.divider(); st.subheader("🔎 列表")
-            df_s = pd.DataFrame(current_students)
             
-            # 強制欄位順序
-            target_cols = ["姓名", "年級", "班別", "學生手機", "爸爸", "媽媽", "家裡", "其他家人"]
+            # 整理顯示資料，包含離班狀態
+            display_list = []
+            for s in current_students:
+                s_copy = s.copy()
+                if s.get('leaving_date'):
+                    s_copy['狀態'] = f"離班 ({s['leaving_date']})"
+                else:
+                    s_copy['狀態'] = "在班"
+                display_list.append(s_copy)
+
+            df_s = pd.DataFrame(display_list)
+            target_cols = ["姓名", "狀態", "年級", "班別", "學生手機", "爸爸", "媽媽", "家裡"]
             for c in target_cols:
                 if c not in df_s.columns: df_s[c] = ""
             df_s = df_s[target_cols]
 
             f_class = st.selectbox("班別篩選", ["全部"] + sorted(list(set([x.get('班別') for x in current_students if x.get('班別')]))))
             if f_class != "全部": df_s = df_s[df_s['班別'] == f_class]
+            
             st.dataframe(df_s, use_container_width=True, hide_index=True)
             
-            with st.expander("🗑️ 刪除"):
+            with st.expander("🗑️ 刪除資料 (慎用)"):
+                st.caption("此操作會完全刪除學生資料。若是學生不補了，建議使用上方的「辦理離班」功能。")
                 d_opts = [f"{r['姓名']} ({r.get('班別')})" for _, r in df_s.iterrows()]
                 to_del = st.multiselect("選擇刪除", d_opts)
                 if to_del and st.button("確認刪除", key="btn_del_manual_stu"):
@@ -466,7 +513,7 @@ def show_general_management_dialog():
         d_pt = st.multiselect("刪除", pts)
         if d_pt and st.button("確認刪", key="btn_del_pt"): save_part_timers_list([x for x in pts if x not in d_pt]); st.rerun()
 
-    # --- Tab 3: 試聽與潛在名單 (功能升級版) ---
+    # --- Tab 3: 試聽與潛在名單 ---
     with tab3:
         st.subheader("🎧 試聽生管理 (未入班)")
         with st.form("new_trial"):
@@ -474,22 +521,17 @@ def show_general_management_dialog():
             c1, c2 = st.columns(2)
             t_name = c1.text_input("試聽生姓名")
             t_grade = c2.selectbox("年級", GRADE_OPTIONS, key="t_g")
-            
             c3, c4 = st.columns(2)
             t_course = c3.selectbox("試聽課程", get_unique_course_names(), key="t_c")
             t_date = c4.date_input("試聽日期", datetime.date.today())
-
             st.write("📞 **聯絡方式 (轉正後會自動帶入)**")
             c5, c6 = st.columns(2)
             t_mobile = c5.text_input("學生手機")
             t_home = c6.text_input("家裡電話")
-            
             c7, c8 = st.columns(2)
             t_dad = c7.text_input("爸爸電話")
             t_mom = c8.text_input("媽媽電話")
-            
             t_other = st.text_input("其他聯絡人")
-
             if st.form_submit_button("新增試聽紀錄"):
                 if t_name and t_course:
                     save_trial_student({
@@ -502,12 +544,10 @@ def show_general_management_dialog():
                     st.rerun()
                 else: st.error("姓名與課程為必填")
         
-        # 顯示目前的試聽生 (新增操作按鈕)
         trials = get_trial_students()
         if trials:
             st.divider()
             st.caption("尚未決定去留的試聽生 (可手動操作)：")
-            
             for t in trials:
                 with st.container(border=True):
                     c_info, c_action = st.columns([3, 2])
@@ -537,13 +577,10 @@ def show_general_management_dialog():
 def show_admin_dialog():
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📅 智慧排課", "👷 工讀排班", "💰 薪資", "🗑️ 資料管理", "🌴 假期管理"])
     
-    # --- Tab 1: 智慧排課 (新增頻率選擇) ---
     with tab1:
         st.subheader("老師課程安排")
         c1, c2 = st.columns(2)
         start_date = c1.date_input("首堂課日期")
-        
-        # ★ 新增：排課頻率（適合寒暑假連續排課）
         freq_type = c2.radio("排課頻率", ["每週固定 (Regular)", "連續每日 (寒暑假)"], horizontal=True)
         weeks_count = st.number_input("持續次數 (週數/天數)", min_value=1, value=12)
         
@@ -559,15 +596,12 @@ def show_admin_dialog():
         s_location = st.selectbox("教室", ["大教室", "小教室", "流放教室", "櫃檯"])
         
         if "preview_schedule" not in st.session_state: st.session_state['preview_schedule'] = None
-        
         if st.button("🔍 檢查時段與假日", key="check_shift"):
             if s_teacher == "請選擇": st.error("請選擇師資")
             else:
                 save_course_name(s_course_name)
                 preview = []
                 year = start_date.year
-                
-                # 準備國定假日
                 holidays = {}
                 try:
                     resp = requests.get(f"https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json").json()
@@ -575,31 +609,21 @@ def show_admin_dialog():
                         if d['isHoliday']: holidays[d['date']] = d['description']
                 except: pass
                 
-                # 準備老師假期
                 teacher_vacs = get_teacher_vacations_cached()
-                
                 t_start = datetime.datetime.strptime(t_start_str, "%H:%M").time()
                 t_end = datetime.datetime.strptime(t_end_str, "%H:%M").time()
                 
                 for i in range(weeks_count):
-                    # ★ 判斷頻率
                     if freq_type == "連續每日 (寒暑假)":
                         current_date = start_date + datetime.timedelta(days=i)
                     else:
                         current_date = start_date + datetime.timedelta(weeks=i)
-                        
                     d_str = current_date.strftime("%Y%m%d")
-                    
-                    # 檢查衝突：1. 國定假日 2. 老師請假
                     is_conflict = False
                     reason = ""
-                    
-                    # 1. 檢查國定假日
                     if d_str in holidays:
                         is_conflict = True
                         reason = holidays[d_str]
-                    
-                    # 2. 檢查老師請假
                     for v in teacher_vacs:
                         if v['teacher'] == s_teacher:
                             v_start = datetime.datetime.fromisoformat(v['start']).date()
@@ -618,7 +642,6 @@ def show_admin_dialog():
                         "selected": not is_conflict
                     })
                 st.session_state['preview_schedule'] = preview
-                
         if st.session_state['preview_schedule']:
             st.divider()
             final_schedule = []
@@ -637,72 +660,46 @@ def show_admin_dialog():
     with tab2:
         st.subheader("👷 工讀生排班系統 (防拖曳版)")
         st.caption("已鎖定日期欄位，避免誤觸拖曳。勾選即代表排班。")
-        
         part_timers_list = get_part_timers_list_cached()
         c_pt1, c_pt2 = st.columns(2)
         pt_name = c_pt1.selectbox("選擇工讀生", part_timers_list)
-        
         c_y, c_m = c_pt2.columns(2)
         next_month_date = datetime.date.today() + relativedelta(months=0) 
         pt_year = c_y.number_input("年份", value=next_month_date.year, key="pt_year")
         pt_month = c_m.number_input("月份", value=next_month_date.month, min_value=1, max_value=12, key="pt_month")
-        
         c_t1, c_t2 = st.columns(2)
         pt_start = c_t1.selectbox("上班時間 (批次設定)", TIME_OPTIONS, index=18, key="pt_start")
         pt_end = c_t2.selectbox("下班時間 (批次設定)", TIME_OPTIONS, index=24, key="pt_end")
-        
         st.divider()
-
         start_of_month = datetime.datetime(pt_year, pt_month, 1)
         end_of_month = start_of_month + relativedelta(months=1)
-        
-        existing_shifts_query = db.collection("shifts")\
-            .where("type", "==", "part_time")\
-            .where("staff", "==", pt_name)\
-            .where("start", ">=", start_of_month.isoformat())\
-            .where("start", "<", end_of_month.isoformat())\
-            .stream()
-            
+        existing_shifts_query = db.collection("shifts").where("type", "==", "part_time").where("staff", "==", pt_name).where("start", ">=", start_of_month.isoformat()).where("start", "<", end_of_month.isoformat()).stream()
         existing_shifts_map = {}
         for doc in existing_shifts_query:
             data = doc.to_dict()
             try:
-                shift_date_str = data['start'][:10]
-                d_obj = datetime.datetime.strptime(shift_date_str, "%Y-%m-%d").date()
+                d_obj = datetime.datetime.strptime(data['start'][:10], "%Y-%m-%d").date()
                 existing_shifts_map[d_obj] = doc.id
             except: pass
-
         st.write(f"正在編輯 **{pt_name}** 在 **{pt_year}年{pt_month}月** 的班表：")
-        
         cols_header = st.columns(7)
         weekdays = ["日", "一", "二", "三", "四", "五", "六"] 
         for idx, w in enumerate(weekdays):
             cols_header[idx].markdown(f"<div style='text-align: center; font-weight: bold; color: #666;'>{w}</div>", unsafe_allow_html=True)
-            
         num_days = py_calendar.monthrange(pt_year, pt_month)[1]
         all_dates = [datetime.date(pt_year, pt_month, d) for d in range(1, num_days + 1)]
-        
         weeks = []
         current_week = []
         first_day_weekday = all_dates[0].weekday() 
         start_padding = (first_day_weekday + 1) % 7
-        
-        for _ in range(start_padding):
-            current_week.append(None)
-            
+        for _ in range(start_padding): current_week.append(None)
         for d in all_dates:
             current_week.append(d)
-            if len(current_week) == 7:
-                weeks.append(current_week)
-                current_week = []
-        
+            if len(current_week) == 7: weeks.append(current_week); current_week = []
         if current_week:
-            while len(current_week) < 7:
-                current_week.append(None)
+            while len(current_week) < 7: current_week.append(None)
             weeks.append(current_week)
-            
         final_selected_dates = []
-        
         for week_dates in weeks:
             cols = st.columns(7) 
             for i, d in enumerate(week_dates):
@@ -710,53 +707,33 @@ def show_admin_dialog():
                     if d:
                         with st.container(border=True):
                             st.markdown(f"<div style='text-align: center; font-weight: bold; margin-bottom: 5px;'>{d.day}</div>", unsafe_allow_html=True)
-                            
                             is_checked = d in existing_shifts_map
-                            
-                            val = st.checkbox(
-                                "排班", 
-                                value=is_checked, 
-                                key=f"chk_{pt_name}_{d}", 
-                                label_visibility="collapsed"
-                            )
-                            
-                            if val:
-                                final_selected_dates.append(d)
-                    else:
-                        st.write("") 
-        
+                            val = st.checkbox("排班", value=is_checked, key=f"chk_{pt_name}_{d}", label_visibility="collapsed")
+                            if val: final_selected_dates.append(d)
+                    else: st.write("") 
         st.divider()
-        
         if st.button(f"💾 儲存變更", type="primary", key="save_pt_table"):
             current_selected_set = set(final_selected_dates)
             original_set = set(existing_shifts_map.keys())
-            
             to_add = current_selected_set - original_set
             to_remove_dates = original_set - current_selected_set
             to_remove_ids = [existing_shifts_map[d] for d in to_remove_dates]
-            
             t_s = datetime.datetime.strptime(pt_start, "%H:%M").time()
             t_e = datetime.datetime.strptime(pt_end, "%H:%M").time()
-            
-            if to_remove_ids:
-                batch_delete_events(to_remove_ids)
-                
+            if to_remove_ids: batch_delete_events(to_remove_ids)
             add_count = 0
             for date_obj in to_add:
                 start_dt = datetime.datetime.combine(date_obj, t_s)
                 end_dt = datetime.datetime.combine(date_obj, t_e)
                 add_event_to_db("工讀", start_dt, end_dt, "part_time", st.session_state['user'], staff=pt_name)
                 add_count += 1
-                
-            if not to_add and not to_remove_ids:
-                st.info("資料未變更")
+            if not to_add and not to_remove_ids: st.info("資料未變更")
             else:
                 msg = []
                 if add_count: msg.append(f"新增 {add_count} 筆")
                 if to_remove_ids: msg.append(f"刪除 {len(to_remove_ids)} 筆")
                 st.success(f"更新成功！({', '.join(msg)})")
-                time.sleep(1)
-                st.rerun()
+                time.sleep(1); st.rerun()
 
     with tab3:
         st.subheader("👨‍🏫 師資薪資設定")
@@ -768,13 +745,11 @@ def show_admin_dialog():
                 if new_t_name:
                     save_teacher_data(new_t_name, new_t_rate)
                     st.rerun()
-        
         teachers_cfg = get_teachers_data()
         if teachers_cfg:
             with st.expander("查看目前師資與薪資列表"):
                 t_list = [{"姓名": k, "單價": v.get('rate', 0)} for k, v in teachers_cfg.items()]
                 st.dataframe(t_list)
-
         st.divider()
         st.subheader("📊 薪資結算報告")
         col_m1, col_m2 = st.columns(2)
@@ -784,8 +759,7 @@ def show_admin_dialog():
             start_date = datetime.datetime(q_year, q_month, 1)
             end_date = start_date + relativedelta(months=1)
             start_str = start_date.isoformat(); end_str = end_date.isoformat()
-            docs = db.collection("shifts").where("type", "==", "shift")\
-                     .where("start", ">=", start_str).where("start", "<", end_str).stream()
+            docs = db.collection("shifts").where("type", "==", "shift").where("start", ">=", start_str).where("start", "<", end_str).stream()
             teachers_cfg = get_teachers_data()
             report = {}
             for doc in docs:
@@ -812,14 +786,11 @@ def show_admin_dialog():
                 batch_delete_events([event_map[l] for l in selected_labels])
                 st.rerun()
 
-    # --- Tab 5: 假期管理 (NEW) ---
     with tab5:
         st.subheader("🌴 老師假期設定")
         st.caption("設定老師的請假區間，系統會在智慧排課時自動偵測衝突。")
-        
         teachers_cfg = get_teachers_data()
         teacher_names = list(teachers_cfg.keys()) + ADMINS
-        
         with st.form("add_vacation"):
             c1, c2 = st.columns(2)
             v_teacher = c1.selectbox("選擇老師", ["請選擇"] + list(set(teacher_names)))
@@ -827,41 +798,26 @@ def show_admin_dialog():
             c3, c4 = st.columns(2)
             v_start = c3.date_input("開始日期")
             v_end = c4.date_input("結束日期")
-            
             if st.form_submit_button("💾 儲存假期"):
                 if v_teacher == "請選擇": st.error("請選擇老師")
                 elif v_end < v_start: st.error("結束日期不能早於開始日期")
                 else:
-                    # 1. 檢查是否有衝突課程 (Retroactive Conflict Detection)
                     start_dt = datetime.datetime.combine(v_start, datetime.time(0, 0))
                     end_dt = datetime.datetime.combine(v_end, datetime.time(23, 59))
-                    
-                    conflict_docs = db.collection("shifts")\
-                        .where("type", "==", "shift")\
-                        .where("teacher", "==", v_teacher)\
-                        .where("start", ">=", start_dt.isoformat())\
-                        .where("start", "<=", end_dt.isoformat())\
-                        .stream()
-                        
+                    conflict_docs = db.collection("shifts").where("type", "==", "shift").where("teacher", "==", v_teacher).where("start", ">=", start_dt.isoformat()).where("start", "<=", end_dt.isoformat()).stream()
                     conflict_ids = [d.id for d in conflict_docs]
-                    
-                    # 2. 儲存假期
                     save_teacher_vacation(v_teacher, start_dt, end_dt, v_reason)
-                    
                     if conflict_ids:
                         st.session_state['pending_reschedule'] = conflict_ids
                         st.warning(f"⚠️ 偵測到該時段已有 {len(conflict_ids)} 堂課！建議標記為「需調課」。")
                     else:
                         st.success("假期設定成功！無衝突課程。")
                         st.rerun()
-
-        # 處理標記調課按鈕 (放在 Form 外面)
         if 'pending_reschedule' in st.session_state and st.session_state['pending_reschedule']:
             if st.button("🚩 將衝突課程標記為「⚠️ 需調課」", type="primary"):
                 batch_mark_reschedule(st.session_state['pending_reschedule'])
-                st.session_state['pending_reschedule'] = None # 清除狀態
+                st.session_state['pending_reschedule'] = None 
                 st.rerun()
-
         st.divider()
         st.write("📋 **目前假期列表**")
         vacs = get_teacher_vacations_cached()
@@ -871,51 +827,36 @@ def show_admin_dialog():
                 c1.write(f"**{v['teacher']}**")
                 c2.write(f"{v['start'][:10]} ~ {v['end'][:10]} ({v['reason']})")
                 if c3.button("🗑️", key=f"del_vac_{v['id']}"):
-                    delete_teacher_vacation(v['id'])
-                    st.rerun()
-        else:
-            st.info("尚無假期紀錄")
+                    delete_teacher_vacation(v['id']); st.rerun()
+        else: st.info("尚無假期紀錄")
 
 # --- 5. 主介面邏輯 ---
 
 tz = pytz.timezone('Asia/Taipei')
 now = datetime.datetime.now(tz)
 
-# 自動登出：僅在凌晨 06:00 ~ 06:30 之間
 if now.hour == 6 and now.minute <= 30 and st.session_state['user'] is not None:
     st.session_state['user'] = None; st.session_state['is_admin'] = False; st.rerun()
 
-# 如果未登入，顯示登入區塊
 if st.session_state['user'] is None:
     st.title("🏫 鳩特數理行政班表")
     st.info("請先登入以使用系統")
-    
     with st.form("main_login_form"):
         user = st.selectbox("請選擇您的身份", ["請選擇"] + LOGIN_LIST)
         password = st.text_input("請輸入密碼", type="password")
         if st.form_submit_button("登入", use_container_width=True):
-            if user == "請選擇":
-                st.error("請選擇身份")
+            if user == "請選擇": st.error("請選擇身份")
             else:
-                is_valid = False
-                is_admin = False
+                is_valid = False; is_admin = False
                 if user in ADMINS:
-                    if password == ADMIN_PASSWORD:
-                        is_valid = True
-                        is_admin = True
+                    if password == ADMIN_PASSWORD: is_valid = True; is_admin = True
                 else:
-                    if password == STAFF_PASSWORD:
-                        is_valid = True
-                
+                    if password == STAFF_PASSWORD: is_valid = True
                 if is_valid:
-                    st.session_state['user'] = user
-                    st.session_state['is_admin'] = is_admin
-                    st.rerun()
-                else:
-                    st.error("密碼錯誤")
+                    st.session_state['user'] = user; st.session_state['is_admin'] = is_admin; st.rerun()
+                else: st.error("密碼錯誤")
     st.stop() 
 
-# 登入後顯示的內容
 col_title, col_login = st.columns([3, 1], vertical_alignment="center")
 with col_title: st.title("🏫 鳩特數理行政班表")
 with col_login:
@@ -925,10 +866,8 @@ with col_login:
 
 st.divider()
 
-# ★ 鳩辦公室增加完畢，並改為 5 欄 ★
 clean_cols = st.columns(5)
 areas = ["櫃檯茶水間", "大教室", "小教室", "流放教室", "鳩辦公室"]
-
 for i, area in enumerate(areas):
     status = get_cleaning_status(area)
     days_diff = "N/A"; delta_days = 999; last_cleaner = "無紀錄"
@@ -951,14 +890,12 @@ for i, area in enumerate(areas):
 
 st.divider()
 
-# ★ 試聽追蹤自動提醒 (放在最顯眼的位置) ★
 pending_trials = get_trial_students()
 follow_up_list = []
 for t in pending_trials:
     try:
         t_date = datetime.date.fromisoformat(t['trial_date'])
-        if datetime.date.today() >= (t_date + datetime.timedelta(days=7)):
-            follow_up_list.append(t)
+        if datetime.date.today() >= (t_date + datetime.timedelta(days=7)): follow_up_list.append(t)
     except: pass
 
 if follow_up_list:
@@ -969,10 +906,8 @@ if follow_up_list:
             st.markdown(f"**🎓 {t['name']}** ({t['grade']})")
             st.caption(f"試聽：{t['course']} ({t['trial_date']})")
             c1, c2 = st.columns(2)
-            if c1.button("✅ 入班", key=f"alert_join_{t['id']}"):
-                move_trial_to_official(t, t['id'])
-            if c2.button("📂 歸檔", key=f"alert_arch_{t['id']}"):
-                move_trial_to_potential(t, t['id'])
+            if c1.button("✅ 入班", key=f"alert_join_{t['id']}"): move_trial_to_official(t, t['id'])
+            if c2.button("📂 歸檔", key=f"alert_arch_{t['id']}"): move_trial_to_potential(t, t['id'])
     st.divider()
 
 if st.session_state['user']:
@@ -980,40 +915,24 @@ if st.session_state['user']:
     if st.session_state['is_admin']:
         if st.button("⚙️ 管理員後台", type="secondary", use_container_width=True): show_admin_dialog()
 
-# --- 6. 智慧點名系統 (課程優先分組版) ---
+# --- 6. 智慧點名系統 ---
 st.divider()
 st.subheader("📋 每日點名")
-
-# 切換日期按鈕
 col_date_btn, col_date_info = st.columns([1, 3], vertical_alignment="center")
-if col_date_btn.button("📅 切換日期", type="secondary"):
-    show_roll_call_review_dialog()
-
-# 決定日期
-if 'selected_calendar_date' in st.session_state:
-    selected_date = st.session_state['selected_calendar_date']
-else:
-    selected_date = datetime.date.today()
-
-with col_date_info:
-    st.markdown(f"**{selected_date}**")
+if col_date_btn.button("📅 切換日期", type="secondary"): show_roll_call_review_dialog()
+if 'selected_calendar_date' in st.session_state: selected_date = st.session_state['selected_calendar_date']
+else: selected_date = datetime.date.today()
+with col_date_info: st.markdown(f"**{selected_date}**")
 
 date_key = selected_date.isoformat()
 db_record = get_roll_call_from_db(date_key)
-
-# 1. 抓取資料並建立「課程 -> 學生名單」的索引 (解決同名不同班問題)
 all_students = get_students_data_cached()
 course_to_students_map = defaultdict(list) 
 for s in all_students:
-    c = s.get('班別')
-    n = s.get('姓名')
-    if c and n:
-        course_to_students_map[c].append(n)
+    c = s.get('班別'); n = s.get('姓名')
+    if c and n: course_to_students_map[c].append(s) # Store full student obj
 
-# 2. 準備當日課程 & 地點對照表 (這段要放在 all_events 之前，所以要先讀取 events)
-# 但因為點名需要 all_events，所以我們得先執行 get_all_events_cached()
 all_events = get_all_events_cached()
-
 daily_courses_display = []
 daily_courses_filter = []     
 course_location_map = {} 
@@ -1023,108 +942,84 @@ for e in all_events:
         props = e.get('extendedProps', {})
         c_title = props.get('title', '')
         c_loc = props.get('location', '')
-        
         if c_loc == "線上": c_loc = "櫃檯"
-        
         daily_courses_filter.append(c_title)
         course_location_map[c_title] = c_loc
-        
         if c_loc: daily_courses_display.append(f"{c_title} ({c_loc})")
         else: daily_courses_display.append(c_title)
 
-# 3. 抓取「現在課表上」應到的學生 
+# Filter Logic: Check Departure Date
 target_students = []
 if daily_courses_display:
     st.caption(f"當日課程：{'、'.join(daily_courses_display)}")
-    for stu in all_students:
-        if stu.get('班別') in daily_courses_filter:
-            target_students.append(stu['姓名'])
-else:
-    st.caption("當日無排課紀錄")
+    for c_name in daily_courses_filter:
+        for s_obj in course_to_students_map.get(c_name, []):
+            # Check leaving date
+            leave_date = s_obj.get('leaving_date')
+            if leave_date and date_key > leave_date: continue # Skip if left
+            target_students.append(s_obj['姓名'])
+else: st.caption("當日無排課紀錄")
 
 target_students = list(set(target_students))
 
-# 決定當前點名狀態 (含自動同步邏輯)
 if db_record:
     current_data = db_record
     if "absent" not in current_data: current_data["absent"] = []
     if "present" not in current_data: current_data["present"] = []
     if "leave" not in current_data: current_data["leave"] = []
     
-    # 自動同步：補入漏掉的學生
     recorded_students = set(current_data["absent"] + current_data["present"] + current_data["leave"])
     missing_students = [s for s in target_students if s not in recorded_students]
-    
-    if missing_students:
-        current_data["absent"].extend(missing_students)
+    if missing_students: current_data["absent"].extend(missing_students)
 else:
     current_data = {"absent": target_students, "present": [], "leave": []}
 
 def save_current_state(absent, present, leave):
     save_data = {
-        "absent": absent,
-        "present": present,
-        "leave": leave,
+        "absent": absent, "present": present, "leave": leave,
         "updated_at": datetime.datetime.now().isoformat(),
         "updated_by": st.session_state['user']
     }
     save_roll_call_to_db(date_key, save_data)
-    st.toast("點名資料已儲存", icon="💾")
-    time.sleep(0.5)
-    st.rerun()
+    st.toast("點名資料已儲存", icon="💾"); time.sleep(0.5); st.rerun()
 
 if st.session_state['user']:
     if not target_students and not current_data['absent'] and not current_data['present'] and not current_data['leave']:
         st.info("今日無課程或無學生名單，無須點名")
     else:
-        # === A. 尚未報到 ===
         st.markdown("### 🔴 尚未報到")
         st.caption("💡 點擊姓名即可選取，再次點擊取消。")
-        
         pending_list = set(current_data['absent']) 
         
         if pending_list:
             all_selected_present = []
             all_selected_leave = []
-            
             displayed_students = set()
-
             sorted_today_courses = sorted(list(set(daily_courses_filter)))
             
             for course_name in sorted_today_courses:
-                students_in_this_course = course_to_students_map.get(course_name, [])
-                
+                # Get names from student objects, filtered by leaving date again just in case
+                students_in_this_course = []
+                for s_obj in course_to_students_map.get(course_name, []):
+                     leave_date = s_obj.get('leaving_date')
+                     if leave_date and date_key > leave_date: continue
+                     students_in_this_course.append(s_obj['姓名'])
+
                 s_list = [s for s in students_in_this_course if s in pending_list]
                 
                 if s_list:
                     displayed_students.update(s_list)
-                    
                     loc_str = course_location_map.get(course_name, "")
                     title_suffix = f" @ {loc_str}" if loc_str else ""
                     
                     with st.expander(f"📘 {course_name}{title_suffix} ({len(s_list)}人)", expanded=True):
                         st.markdown("**👇 點擊出席學生 (到)**")
-                        selected_p = st.pills(
-                            f"pills_present_{course_name}",
-                            options=s_list,
-                            selection_mode="multi",
-                            key=f"pills_p_{course_name}_{date_key}",
-                            label_visibility="collapsed"
-                        )
-                        
+                        selected_p = st.pills(f"pills_present_{course_name}", options=s_list, selection_mode="multi", key=f"pills_p_{course_name}_{date_key}", label_visibility="collapsed")
                         remaining_for_leave = [s for s in s_list if s not in selected_p]
-                        
                         if remaining_for_leave:
                             st.markdown("**👇 點擊請假學生 (假)**")
-                            selected_l = st.pills(
-                                f"pills_leave_{course_name}",
-                                options=remaining_for_leave,
-                                selection_mode="multi",
-                                key=f"pills_l_{course_name}_{date_key}",
-                                label_visibility="collapsed"
-                            )
+                            selected_l = st.pills(f"pills_leave_{course_name}", options=remaining_for_leave, selection_mode="multi", key=f"pills_l_{course_name}_{date_key}", label_visibility="collapsed")
                             all_selected_leave.extend(selected_l)
-                        
                         all_selected_present.extend(selected_p)
 
             leftover_students = [s for s in pending_list if s not in displayed_students]
@@ -1133,7 +1028,6 @@ if st.session_state['user']:
                     st.caption("這些學生不在今日排定的課程名單中，但出現在未到列表")
                     st.markdown("**👇 點擊出席學生 (到)**")
                     l_p = st.pills("pills_other_p", options=leftover_students, selection_mode="multi", key=f"p_other_{date_key}")
-                    
                     rem_l = [s for s in leftover_students if s not in l_p]
                     if rem_l:
                         st.markdown("**👇 點擊請假學生 (假)**")
@@ -1142,24 +1036,18 @@ if st.session_state['user']:
                     all_selected_present.extend(l_p)
 
             st.divider()
-            
             if st.button("🚀 確認送出 (更新狀態)", type="primary", use_container_width=True):
                 conflict = set(all_selected_present) & set(all_selected_leave)
-                if conflict:
-                    st.error(f"錯誤：{', '.join(conflict)} 不能同時選取")
-                elif not all_selected_present and not all_selected_leave:
-                    st.warning("您未選取任何學生")
+                if conflict: st.error(f"錯誤：{', '.join(conflict)} 不能同時選取")
+                elif not all_selected_present and not all_selected_leave: st.warning("您未選取任何學生")
                 else:
                     new_absent = [p for p in current_data['absent'] if p not in all_selected_present and p not in all_selected_leave]
                     new_present = current_data['present'] + all_selected_present
                     new_leave = current_data['leave'] + all_selected_leave
                     save_current_state(new_absent, new_present, new_leave)
-        else:
-            st.success("🎉 全員已完成點名！")
+        else: st.success("🎉 全員已完成點名！")
 
         st.divider()
-
-        # === B. 反悔區 ===
         with st.expander(f"已到 ({len(current_data['present'])}) / 請假 ({len(current_data['leave'])})", expanded=False):
             if current_data['present']:
                 st.write("**🟢 已到 (點選以取消)**")
@@ -1169,7 +1057,6 @@ if st.session_state['user']:
                         new_present = [p for p in current_data['present'] if p not in undo_p]
                         new_absent = current_data['absent'] + undo_p
                         save_current_state(new_absent, new_present, current_data['leave'])
-            
             if current_data['leave']:
                 st.divider()
                 st.write("**🟡 請假 (點選以取消)**")
@@ -1179,7 +1066,6 @@ if st.session_state['user']:
                         new_leave = [p for p in current_data['leave'] if p not in undo_l]
                         new_absent = current_data['absent'] + undo_l
                         save_current_state(current_data['absent'], current_data['present'], new_leave)
-
 else:
     st.warning("請登入以進行點名")
 
@@ -1187,31 +1073,29 @@ else:
 st.divider()
 st.subheader("📅 行事曆")
 
-# 這裡使用我們之前準備好的 all_events
 calendar_options = {
     "editable": True, 
     "headerToolbar": {
         "left": "prev,next",
         "center": "title",
-        "right": "today dayGridMonth,listMonth,timeGridDay" # ★ 右上角加入 today 按鈕與 views
+        "right": "today dayGridMonth,listMonth,timeGridDay" 
     },
     "initialView": "dayGridMonth", 
     "height": "650px", "locale": "zh-tw",
-    "slotMinTime": "08:00:00",  # Added: 設定最早顯示時間
-    "slotMaxTime": "22:00:00",  # Added: 設定最晚顯示時間
+    "slotMinTime": "08:00:00", 
+    "slotMaxTime": "22:00:00", 
     "titleFormat": {"year": "numeric", "month": "long"},
     "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
     "eventTimeFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
     "views": {
         "dayGridMonth": {"displayEventTime": False},
         "listMonth": {"displayEventTime": True},
-        "timeGridDay": {"displayEventTime": True} # 日行程視圖設定
+        "timeGridDay": {"displayEventTime": True} 
     },
     "selectable": True,
 }
 cal = calendar(events=all_events, options=calendar_options, callbacks=['dateClick', 'eventClick'])
 
-# 點擊日期：只開公告
 if cal.get("dateClick"):
     clicked = cal["dateClick"]["date"]
     try:
@@ -1221,7 +1105,6 @@ if cal.get("dateClick"):
             if dt_utc.tzinfo is None: dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
             d_obj = dt_utc.astimezone(pytz.timezone('Asia/Taipei')).date()
         else: d_obj = datetime.datetime.strptime(clicked, "%Y-%m-%d").date()
-        
         if st.session_state['user']: show_notice_dialog(default_date=d_obj)
     except: pass
 
