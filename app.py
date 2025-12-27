@@ -786,11 +786,14 @@ def show_admin_dialog():
                 batch_delete_events([event_map[l] for l in selected_labels])
                 st.rerun()
 
+# --- Tab 5: 假期管理 (修正索引錯誤版) ---
     with tab5:
         st.subheader("🌴 老師假期設定")
         st.caption("設定老師的請假區間，系統會在智慧排課時自動偵測衝突。")
+        
         teachers_cfg = get_teachers_data()
         teacher_names = list(teachers_cfg.keys()) + ADMINS
+        
         with st.form("add_vacation"):
             c1, c2 = st.columns(2)
             v_teacher = c1.selectbox("選擇老師", ["請選擇"] + list(set(teacher_names)))
@@ -798,26 +801,45 @@ def show_admin_dialog():
             c3, c4 = st.columns(2)
             v_start = c3.date_input("開始日期")
             v_end = c4.date_input("結束日期")
+            
             if st.form_submit_button("💾 儲存假期"):
                 if v_teacher == "請選擇": st.error("請選擇老師")
                 elif v_end < v_start: st.error("結束日期不能早於開始日期")
                 else:
                     start_dt = datetime.datetime.combine(v_start, datetime.time(0, 0))
                     end_dt = datetime.datetime.combine(v_end, datetime.time(23, 59))
-                    conflict_docs = db.collection("shifts").where("type", "==", "shift").where("teacher", "==", v_teacher).where("start", ">=", start_dt.isoformat()).where("start", "<=", end_dt.isoformat()).stream()
-                    conflict_ids = [d.id for d in conflict_docs]
+                    
+                    # ★ 修改處：只向資料庫查詢「時間範圍」，避開複合索引錯誤
+                    # 這樣就不會觸發 FailedPrecondition 錯誤了
+                    potential_conflicts = db.collection("shifts")\
+                        .where("start", ">=", start_dt.isoformat())\
+                        .where("start", "<=", end_dt.isoformat())\
+                        .stream()
+                    
+                    conflict_ids = []
+                    for doc in potential_conflicts:
+                        data = doc.to_dict()
+                        # 在 Python 端進行過濾：確認是「課程」且是「該位老師」
+                        if data.get("type") == "shift" and data.get("teacher") == v_teacher:
+                            conflict_ids.append(doc.id)
+                    
+                    # 儲存假期
                     save_teacher_vacation(v_teacher, start_dt, end_dt, v_reason)
+                    
                     if conflict_ids:
                         st.session_state['pending_reschedule'] = conflict_ids
                         st.warning(f"⚠️ 偵測到該時段已有 {len(conflict_ids)} 堂課！建議標記為「需調課」。")
                     else:
                         st.success("假期設定成功！無衝突課程。")
                         st.rerun()
+
+        # 處理標記調課按鈕 (放在 Form 外面)
         if 'pending_reschedule' in st.session_state and st.session_state['pending_reschedule']:
             if st.button("🚩 將衝突課程標記為「⚠️ 需調課」", type="primary"):
                 batch_mark_reschedule(st.session_state['pending_reschedule'])
                 st.session_state['pending_reschedule'] = None 
                 st.rerun()
+
         st.divider()
         st.write("📋 **目前假期列表**")
         vacs = get_teacher_vacations_cached()
@@ -827,8 +849,10 @@ def show_admin_dialog():
                 c1.write(f"**{v['teacher']}**")
                 c2.write(f"{v['start'][:10]} ~ {v['end'][:10]} ({v['reason']})")
                 if c3.button("🗑️", key=f"del_vac_{v['id']}"):
-                    delete_teacher_vacation(v['id']); st.rerun()
-        else: st.info("尚無假期紀錄")
+                    delete_teacher_vacation(v['id'])
+                    st.rerun()
+        else:
+            st.info("尚無假期紀錄")
 
 # --- 5. 主介面邏輯 ---
 
